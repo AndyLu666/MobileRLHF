@@ -10,7 +10,7 @@ This directory contains PyTorch reference implementations that mirror the C++ tr
 
 PyTorch + PEFT implementation of GPT-2 LoRA training for validation against the C++ implementation.
 
-**Usage:**
+**Usage (SFT):**
 ```bash
 python pytorch_alignment/gpt2_lora_finetune.py \
   --data_dir data/wikitext2/wikitext-2-raw \
@@ -26,6 +26,18 @@ python pytorch_alignment/gpt2_lora_finetune.py \
   --pretrained_dir gpt2_lora_finetune/pretrained/gpt2-medium \
   --lora_out pytorch_runs/gpt2_medium_lora \
   --batch_size 4 --epochs 1
+```
+
+**Usage (DPO):**
+```bash
+python pytorch_alignment/gpt2_lora_finetune.py \
+  --pretrained_dir gpt2_lora_finetune/pretrained/gpt2 \
+  --data_dir data/wikitext2/wikitext-2-raw \
+  --train_mode dpo \
+  --preference_jsonl review-stage/synthetic_dpo_smoke.jsonl \
+  --lora_out pytorch_runs/gpt2_dpo_lora \
+  --steps 10 --batch_size 2 --grad_accum_steps 1 \
+  --seq_len 128 --rank 8 --alpha 16 --dpo_beta 0.1
 ```
 
 ---
@@ -51,7 +63,7 @@ python pytorch_alignment/gpt2_full_finetune.py \
 
 PyTorch + PEFT implementation of Gemma LoRA training.
 
-**Usage:**
+**Usage (SFT):**
 ```bash
 python pytorch_alignment/gemma_lora_finetune.py \
   --model_dir gemma-3-270m \
@@ -71,6 +83,18 @@ python pytorch_alignment/gemma_lora_finetune.py \
   --output_dir pytorch_runs/gemma_1b_lora
 ```
 
+**Usage (DPO):**
+```bash
+python pytorch_alignment/gemma_lora_finetune.py \
+  --model_dir gemma-3-270m \
+  --data_dir data/wikitext2/wikitext-2-raw \
+  --train_mode dpo \
+  --preference_jsonl review-stage/synthetic_dpo_smoke.jsonl \
+  --output_dir pytorch_runs/gemma_dpo_lora \
+  --max_steps 10 --batch 2 --seq_len 256 \
+  --target_mode attn --lora_r 8 --lora_alpha 32 --dpo_beta 0.1
+```
+
 ---
 
 ### Qwen2.5-0.5B LoRA Fine-tuning
@@ -79,7 +103,7 @@ python pytorch_alignment/gemma_lora_finetune.py \
 
 Supports WikiText-2 (default) and MMLU JSONL (ids/mask) for masked causal LM training.
 
-**Usage (WikiText-2):**
+**Usage (WikiText-2 / SFT):**
 ```bash
 python pytorch_alignment/qwen_lora_finetune.py \
   --model_dir Qwen2.5-0.5B \
@@ -99,6 +123,59 @@ python pytorch_alignment/qwen_lora_finetune.py \
   --output_dir pytorch_runs/qwen_mmlu_lora \
   --target_mode qv  # q,v only (matches C++ default)
 ```
+
+**Usage (DPO):**
+```bash
+python pytorch_alignment/qwen_lora_finetune.py \
+  --model_dir Qwen2.5-0.5B \
+  --train_mode dpo \
+  --preference_jsonl review-stage/synthetic_dpo_smoke.jsonl \
+  --output_dir pytorch_runs/qwen_dpo_lora \
+  --steps 10 --batch 2 --seq_len 256 \
+  --target_mode qv --dpo_beta 0.1
+```
+
+---
+
+## DPO Preference Training
+
+All three LoRA trainers now support `--train_mode dpo` in addition to the original SFT flow.
+
+### Preference JSONL Schema
+
+Each line should contain a single preference tuple:
+
+```json
+{"prompt":"...","chosen":"preferred answer","rejected":"less preferred answer"}
+```
+
+Semantics:
+- `prompt`: the shared input context
+- `chosen`: the response the policy should prefer
+- `rejected`: the alternative response the policy should down-rank
+
+### DPO CLI Flags
+
+- `--train_mode dpo`: switches the trainer from token-label SFT to preference optimization
+- `--preference_jsonl`: required training dataset in `(prompt, chosen, rejected)` format
+- `--preference_valid_jsonl`: optional validation preference dataset; falls back to the training file when omitted
+- `--reference_model_dir`: optional frozen reference model path; defaults to the base pretrained model
+- `--dpo_beta`: DPO temperature / margin scaling coefficient
+
+### Metrics
+
+In DPO mode, perplexity is no longer the main signal. The trainers log:
+- `loss`
+- `reward_acc`
+- `reward_margin`
+- `chosen_reward`
+- `rejected_reward`
+
+### Migration Note from SFT
+
+- SFT uses `labels` and token-level cross-entropy against one target answer.
+- DPO uses paired completions and compares policy-vs-reference log-ratio margins.
+- Existing SFT paths remain backward compatible and unchanged by default.
 
 ---
 

@@ -15,6 +15,13 @@ try:
 except ImportError as e:  # pragma: no cover - import-time guard
     raise SystemExit("Please install peft to run this script: pip install peft") from e
 
+from pytorch_alignment.dpo_utils import (
+    PreferenceDataset,
+    compute_dpo_batch_metrics,
+    dpo_collate_batch,
+    evaluate_dpo,
+)
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -216,6 +223,11 @@ def main():
     parser.add_argument("--eval_steps", type=int, default=0)
     parser.add_argument("--eval_batches", type=int, default=50)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--train_mode", type=str, default="sft", choices=["sft", "dpo"])
+    parser.add_argument("--preference_jsonl", type=str, default="")
+    parser.add_argument("--preference_valid_jsonl", type=str, default="")
+    parser.add_argument("--reference_model_dir", type=str, default="")
+    parser.add_argument("--dpo_beta", type=float, default=0.1)
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -232,13 +244,25 @@ def main():
         tok.pad_token_id = tok.eos_token_id
 
     use_jsonl = bool(args.jsonl_train)
-    if use_jsonl:
+    use_dpo = args.train_mode == "dpo"
+    if use_dpo:
+        if not args.preference_jsonl:
+            raise SystemExit("--preference_jsonl is required when --train_mode dpo")
+        train_dataset = PreferenceDataset(args.preference_jsonl, tok, args.seq_len)
+        eval_dataset = (
+            PreferenceDataset(args.preference_valid_jsonl, tok, args.seq_len)
+            if args.preference_valid_jsonl
+            else train_dataset
+        )
+        collate_fn = dpo_collate_batch
+    elif use_jsonl:
         train_dataset: Dataset = JsonlMaskedDataset(args.jsonl_train, args.seq_len, tok.pad_token_id)
         eval_dataset: Dataset = (
             JsonlMaskedDataset(args.jsonl_valid, args.seq_len, tok.pad_token_id)
             if args.jsonl_valid
             else train_dataset
         )
+        collate_fn = collate_batch
     else:
         train_dataset = WikiTextDataset(
             os.path.join(args.data_dir, "wiki.train.raw"),
@@ -258,23 +282,31 @@ def main():
             insert_eos_between_lines=True,
             drop_last=False,
         )
+        collate_fn = collate_batch
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=max(1, args.batch),
         shuffle=True,
         drop_last=True,
-        collate_fn=collate_batch,
+        collate_fn=collate_fn,
     )
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=max(1, args.batch),
         shuffle=False,
         drop_last=False,
-        collate_fn=collate_batch,
+        collate_fn=collate_fn,
     )
 
     model = AutoModelForCausalLM.from_pretrained(args.model_dir, torch_dtype=torch_dtype)
+    ref_model = None
+    if use_dpo:
+        ref_dir = args.reference_model_dir or args.model_dir
+        ref_model = AutoModelForCausalLM.from_pretrained(ref_dir, torch_dtype=torch_dtype).to(device)
+        ref_model.eval()
+        for p in ref_model.parameters():
+            p.requires_grad = False
     target_modules = build_target_modules(args.target_mode, args.lora_targets)
     lora_cfg = LoraConfig(
         r=args.lora_r,
@@ -319,11 +351,18 @@ def main():
         for _ in range(max(1, args.grad_accum)):
             batch = next(train_iter)
             batch = {k: v.to(device) for k, v in batch.items()}
-            out = model(**batch)
-            loss = out.loss
+            if use_dpo:
+                dpo_metrics = compute_dpo_batch_metrics(model, ref_model, batch, args.dpo_beta)
+                loss = dpo_metrics["loss"]
+            else:
+                out = model(**batch)
+                loss = out.loss
             (loss / max(1, args.grad_accum)).backward()
             accum_loss += loss.item()
-            accum_tokens += int(batch["attention_mask"].sum().item())
+            if use_dpo:
+                accum_tokens += int(batch["chosen_attention_mask"].sum().item())
+            else:
+                accum_tokens += int(batch["attention_mask"].sum().item())
 
         if args.max_grad_norm and args.max_grad_norm > 0:
             torch.nn.utils.clip_grad_norm_(trainable, args.max_grad_norm)
@@ -343,18 +382,39 @@ def main():
             ema_loss = beta * ema_loss + (1.0 - beta) * avg_loss
 
         if global_step % max(1, args.logging_steps) == 0:
-            ppl = math.exp(avg_loss)
-            print(
-                f"[Train] step {global_step}/{total_steps} "
-                f"lr {lr_cur:.6f} loss {avg_loss:.4f} ppl {ppl:.2f} tokens {accum_tokens}"
-            )
+            if use_dpo:
+                print(
+                    f"[Train] step {global_step}/{total_steps} "
+                    f"lr {lr_cur:.6f} loss {avg_loss:.4f} "
+                    f"reward_acc {dpo_metrics['reward_accuracy'].item():.4f} "
+                    f"reward_margin {dpo_metrics['reward_margin'].item():.4f} "
+                    f"chosen_reward {dpo_metrics['chosen_reward'].item():.4f} "
+                    f"rejected_reward {dpo_metrics['rejected_reward'].item():.4f} "
+                    f"tokens {accum_tokens}"
+                )
+            else:
+                ppl = math.exp(avg_loss)
+                print(
+                    f"[Train] step {global_step}/{total_steps} "
+                    f"lr {lr_cur:.6f} loss {avg_loss:.4f} ppl {ppl:.2f} tokens {accum_tokens}"
+                )
 
         if args.eval_steps > 0 and global_step % args.eval_steps == 0:
-            valid_ppl = evaluate(model, eval_loader, device, args.eval_batches)
-            print(
-                f"[Eval] step {global_step}/{total_steps} valid_ppl {valid_ppl:.2f} "
-                f"ema_loss {ema_loss:.4f} total_tokens {token_counter}"
-            )
+            if use_dpo:
+                eval_metrics = evaluate_dpo(model, ref_model, eval_loader, device, args.eval_batches, args.dpo_beta)
+                print(
+                    f"[Eval] step {global_step}/{total_steps} "
+                    f"loss {eval_metrics['loss']:.4f} "
+                    f"reward_acc {eval_metrics['reward_accuracy']:.4f} "
+                    f"reward_margin {eval_metrics['reward_margin']:.4f} "
+                    f"ema_loss {ema_loss:.4f} total_tokens {token_counter}"
+                )
+            else:
+                valid_ppl = evaluate(model, eval_loader, device, args.eval_batches)
+                print(
+                    f"[Eval] step {global_step}/{total_steps} valid_ppl {valid_ppl:.2f} "
+                    f"ema_loss {ema_loss:.4f} total_tokens {token_counter}"
+                )
 
     os.makedirs(args.output_dir, exist_ok=True)
     model.save_pretrained(args.output_dir)
