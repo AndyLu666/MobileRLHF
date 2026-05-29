@@ -1,16 +1,16 @@
-# PyTorch Alignment Baselines
+# PyTorch 对齐基线
 
-This directory contains PyTorch reference implementations that mirror the C++ training pipelines for numerical validation and comparison.
+这个目录包含一组 PyTorch 参考实现，用来和 C++ 训练流水线做数值对齐、行为比较和迁移验证。
 
-## Available Scripts
+## 可用脚本
 
-### GPT-2 LoRA Fine-tuning
-**File:** `gpt2_lora_finetune.py`  
-**Mirrors:** `gpt2_lora_finetune/main.cpp`
+### GPT-2 LoRA 微调
+**文件：** `gpt2_lora_finetune.py`  
+**对应：** `gpt2_lora_finetune/main.cpp`
 
-PyTorch + PEFT implementation of GPT-2 LoRA training for validation against the C++ implementation.
+这是一个基于 PyTorch + PEFT 的 GPT-2 LoRA 训练实现，主要用于和 C++ 版本做对齐验证。
 
-**Usage (SFT):**
+**用法（SFT）：**
 ```bash
 python pytorch_alignment/gpt2_lora_finetune.py \
   --data_dir data/wikitext2/wikitext-2-raw \
@@ -20,7 +20,7 @@ python pytorch_alignment/gpt2_lora_finetune.py \
   --rank 8 --alpha 16 --lr 2e-4 --lora_dropout 0.0
 ```
 
-**For GPT-2 Medium:**
+**GPT-2 Medium 示例：**
 ```bash
 python pytorch_alignment/gpt2_lora_finetune.py \
   --pretrained_dir gpt2_lora_finetune/pretrained/gpt2-medium \
@@ -28,7 +28,7 @@ python pytorch_alignment/gpt2_lora_finetune.py \
   --batch_size 4 --epochs 1
 ```
 
-**Usage (DPO):**
+**用法（DPO）：**
 ```bash
 python pytorch_alignment/gpt2_lora_finetune.py \
   --pretrained_dir gpt2_lora_finetune/pretrained/gpt2 \
@@ -42,11 +42,11 @@ python pytorch_alignment/gpt2_lora_finetune.py \
 
 ---
 
-### GPT-2 Full Fine-tuning
-**File:** `gpt2_full_finetune.py`  
-**Purpose:** Baseline for full parameter fine-tuning comparison
+### GPT-2 全参数微调
+**文件：** `gpt2_full_finetune.py`  
+**用途：** 作为全参数微调对照基线
 
-**Usage:**
+**用法：**
 ```bash
 python pytorch_alignment/gpt2_full_finetune.py \
   --data_dir data/wikitext2/wikitext-2-raw \
@@ -57,13 +57,13 @@ python pytorch_alignment/gpt2_full_finetune.py \
 
 ---
 
-### Gemma LoRA Fine-tuning
-**File:** `gemma_lora_finetune.py`  
-**Mirrors:** `operators/finetune_ops/optim/train_lora_gemma.cpp`
+### Gemma LoRA 微调
+**文件：** `gemma_lora_finetune.py`  
+**对应：** `operators/finetune_ops/optim/train_lora_gemma.cpp`
 
-PyTorch + PEFT implementation of Gemma LoRA training.
+这是一个基于 PyTorch + PEFT 的 Gemma LoRA 训练实现。
 
-**Usage (SFT):**
+**用法（SFT）：**
 ```bash
 python pytorch_alignment/gemma_lora_finetune.py \
   --model_dir gemma-3-270m \
@@ -75,7 +75,7 @@ python pytorch_alignment/gemma_lora_finetune.py \
   --torch_dtype float32
 ```
 
-**For Gemma 1B:**
+**Gemma 1B 示例：**
 ```bash
 python pytorch_alignment/gemma_lora_finetune.py \
   --model_dir gemma-3-1b \
@@ -83,7 +83,7 @@ python pytorch_alignment/gemma_lora_finetune.py \
   --output_dir pytorch_runs/gemma_1b_lora
 ```
 
-**Usage (DPO):**
+**用法（DPO）：**
 ```bash
 python pytorch_alignment/gemma_lora_finetune.py \
   --model_dir gemma-3-270m \
@@ -97,13 +97,13 @@ python pytorch_alignment/gemma_lora_finetune.py \
 
 ---
 
-### Qwen2.5-0.5B LoRA Fine-tuning
-**File:** `qwen_lora_finetune.py`  
-**Mirrors:** `qwen_lora_finetune/src/wikitext_main.cpp` and `src/mmlu_main.cpp`
+### Qwen2.5-0.5B LoRA 微调
+**文件：** `qwen_lora_finetune.py`  
+**对应：** `qwen_lora_finetune/src/wikitext_main.cpp` 和 `src/mmlu_main.cpp`
 
-Supports WikiText-2 (default) and MMLU JSONL (ids/mask) for masked causal LM training.
+默认支持 WikiText-2，也支持用于 masked causal LM 的 MMLU JSONL（`ids/mask`）模式。
 
-**Usage (WikiText-2 / SFT):**
+**用法（WikiText-2 / SFT）：**
 ```bash
 python pytorch_alignment/qwen_lora_finetune.py \
   --model_dir Qwen2.5-0.5B \
@@ -113,7 +113,7 @@ python pytorch_alignment/qwen_lora_finetune.py \
   --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
 ```
 
-**Usage (MMLU JSONL, ids/mask):**
+**用法（MMLU JSONL，ids/mask）：**
 ```bash
 python pytorch_alignment/qwen_lora_finetune.py \
   --model_dir Qwen2.5-0.5B \
@@ -121,10 +121,10 @@ python pytorch_alignment/qwen_lora_finetune.py \
   --jsonl_valid runs/mmlu_jsonl_qwen/valid.jsonl \
   --seq_len 128 --batch 8 --grad_accum 1 \
   --output_dir pytorch_runs/qwen_mmlu_lora \
-  --target_mode qv  # q,v only (matches C++ default)
+  --target_mode qv
 ```
 
-**Usage (DPO):**
+**用法（DPO）：**
 ```bash
 python pytorch_alignment/qwen_lora_finetune.py \
   --model_dir Qwen2.5-0.5B \
@@ -137,54 +137,54 @@ python pytorch_alignment/qwen_lora_finetune.py \
 
 ---
 
-## DPO Preference Training
+## DPO 偏好训练
 
-All three LoRA trainers now support `--train_mode dpo` in addition to the original SFT flow.
+现在三套 LoRA trainer 都支持 `--train_mode dpo`，同时保留原来的 SFT 路径。
 
-### Preference JSONL Schema
+### Preference JSONL 格式
 
-Each line should contain a single preference tuple:
+每一行是一条偏好样本，格式如下：
 
 ```json
 {"prompt":"...","chosen":"preferred answer","rejected":"less preferred answer"}
 ```
 
-Semantics:
-- `prompt`: the shared input context
-- `chosen`: the response the policy should prefer
-- `rejected`: the alternative response the policy should down-rank
+字段含义：
+- `prompt`：共享输入上下文
+- `chosen`：希望策略模型偏好的回答
+- `rejected`：希望策略模型压低分数的回答
 
-### DPO CLI Flags
+### DPO CLI 参数
 
-- `--train_mode dpo`: switches the trainer from token-label SFT to preference optimization
-- `--preference_jsonl`: required training dataset in `(prompt, chosen, rejected)` format
-- `--preference_valid_jsonl`: optional validation preference dataset; falls back to the training file when omitted
-- `--reference_model_dir`: optional frozen reference model path; defaults to the base pretrained model
-- `--dpo_beta`: DPO temperature / margin scaling coefficient
+- `--train_mode dpo`：把 trainer 从 token-label SFT 切换成偏好优化
+- `--preference_jsonl`：必填，训练集，格式为 `(prompt, chosen, rejected)`
+- `--preference_valid_jsonl`：可选，验证集；不填时默认回退到训练文件
+- `--reference_model_dir`：可选，冻结 reference model 路径；默认使用底座模型
+- `--dpo_beta`：DPO 温度 / margin 缩放系数
 
-### Metrics
+### 指标说明
 
-In DPO mode, perplexity is no longer the main signal. The trainers log:
+在 DPO 模式下，`perplexity` 不再是核心指标。当前会记录：
 - `loss`
 - `reward_acc`
 - `reward_margin`
 - `chosen_reward`
 - `rejected_reward`
 
-### Migration Note from SFT
+### 从 SFT 迁移到 DPO 的区别
 
-- SFT uses `labels` and token-level cross-entropy against one target answer.
-- DPO uses paired completions and compares policy-vs-reference log-ratio margins.
-- Existing SFT paths remain backward compatible and unchanged by default.
+- SFT 使用 `labels`，对单个目标回答做 token-level cross entropy。
+- DPO 使用成对 completion，比的是 policy 与 reference 的 log-ratio margin。
+- 现有 SFT 路径默认保持兼容，不会被 DPO 改坏。
 
 ---
 
-## Configuration Alignment
+## 配置对齐
 
-All scripts are configured to match C++ implementations:
+这些脚本默认尽量和 C++ 实现保持一致：
 
-| Parameter | GPT-2 | Gemma |
-|-----------|-------|-------|
+| 参数 | GPT-2 | Gemma |
+|------|-------|-------|
 | **LoRA Rank** | 8 | 8 |
 | **LoRA Alpha** | 16 | 32 |
 | **LoRA Targets** | AttnQKV, AttnProj | q_proj, k_proj, v_proj, o_proj |
@@ -195,76 +195,79 @@ All scripts are configured to match C++ implementations:
 
 ---
 
-## Key Features
+## 关键特性
 
-### Identical Training Flow
-1. Load pretrained weights from local directory
-2. Inject LoRA adapters using PEFT
-3. Freeze base parameters
-4. Train on WikiText-2 with identical tokenization
-5. Save LoRA adapters in SafeTensors format
+### 一致的训练流程
+1. 从本地目录加载预训练权重
+2. 用 PEFT 注入 LoRA adapter
+3. 冻结 base model 参数
+4. 使用一致的 tokenizer 在 WikiText-2 上训练
+5. 以 SafeTensors 格式保存 LoRA adapter
 
-### Gradient Accumulation
-Both implementations support gradient accumulation with proper scaling:
+### 梯度累积
+所有实现都支持正确缩放的梯度累积：
+
+```text
+effective_batch_size = batch_size x grad_accum_steps
 ```
-effective_batch_size = batch_size × grad_accum_steps
-```
 
-### Learning Rate Scheduling
-- **Warmup:** Linear warmup for first N% of steps
-- **Decay:** Cosine decay to 10% of base LR (GPT-2) or linear (Gemma)
+### 学习率调度
+- **Warmup：** 前若干步线性升温
+- **Decay：** GPT-2 使用 cosine 衰减到基准学习率的 10%，Gemma 使用 linear/cosine
 
-### Loss Computation
-Uses the same shifted cross-entropy:
+### Loss 计算
+SFT 路径仍然使用标准 shifted cross-entropy：
 - Logits: `[:, :-1, :]`
 - Labels: `[:, 1:]`
-- Matches C++ `lm_cross_entropy` implementation
+- 和 C++ 的 `lm_cross_entropy` 实现保持一致
 
 ---
 
-## Validation Use Cases
+## 验证场景
 
-### 1. Numerical Alignment Check
-Compare loss curves and final adapters:
+### 1. 数值对齐检查
+比较 loss 曲线和最终 adapter：
+
 ```bash
-# Run C++ version
+# 运行 C++ 版本
 ./build/gpt2_lora_finetune --steps 100 --lora_out cpp_lora.safetensors
 
-# Run PyTorch version
+# 运行 PyTorch 版本
 python pytorch_alignment/gpt2_lora_finetune.py --steps 100 --lora_out pt_lora
 
-# Compare outputs (losses should match within 1-2%)
+# 对比输出（loss 一般应在 1-2% 以内）
 ```
 
-### 2. Gradient Verification
-Both implementations can output gradients for comparison during alignment debugging.
+### 2. 梯度验证
+在做 alignment debugging 时，可以导出梯度进行对比。
 
-### 3. Performance Benchmarking
-PyTorch version serves as speed and memory baseline for C++ optimization validation.
+### 3. 性能基线
+PyTorch 版本可以作为 C++ 优化前的速度和显存基线。
 
 ---
 
-## Requirements
+## 环境要求
 
-### Python Environment
+### Python 环境
 ```bash
 python3 -m venv pt_env
 source pt_env/bin/activate
 pip install torch transformers peft datasets
 ```
 
-### Data Preparation
-WikiText-2 raw text files should be in:
-```
+### 数据准备
+WikiText-2 原始文本建议放在：
+
+```text
 data/wikitext2/wikitext-2-raw/
 ├── wiki.train.raw
 ├── wiki.valid.raw
 └── wiki.test.raw
 ```
 
-### Model Weights
-Pretrained models should be downloaded locally:
-- GPT-2: `gpt2_lora_finetune/pretrained/gpt2/`
-- GPT-2 Medium: `gpt2_lora_finetune/pretrained/gpt2-medium/`
-- Gemma 270M: `gemma-3-270m/`
-- Gemma 1B: `gemma-3-1b/`
+### 模型权重
+预训练模型建议提前下载到本地：
+- GPT-2：`gpt2_lora_finetune/pretrained/gpt2/`
+- GPT-2 Medium：`gpt2_lora_finetune/pretrained/gpt2-medium/`
+- Gemma 270M：`gemma-3-270m/`
+- Gemma 1B：`gemma-3-1b/`

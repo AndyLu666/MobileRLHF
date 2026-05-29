@@ -17,6 +17,7 @@ cmake_install.cmake
 *.dylib
 *.dll
 
+
 # Model weights and data (too large for GitHub)
 gemma-3-270m/
 gemma-3-1b/
@@ -43,6 +44,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.env
+.env.*
+*.env
 env/
 venv/
 .venv/
@@ -70,4 +74,3 @@ temp/
 
 # Large test files
 *.npy
-
