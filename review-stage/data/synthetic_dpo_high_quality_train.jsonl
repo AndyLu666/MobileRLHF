@@ -1,0 +1,8 @@
+{"prompt":"Task: Reply with the exact token GOOD.\nAssistant:","chosen":" GOOD","rejected":" BAD!"}
+{"prompt":"Task: Reply with the exact token GOOD.\nAssistant:","chosen":" GOOD","rejected":" WRONG"}
+{"prompt":"Task: Reply with the exact token YES.\nAssistant:","chosen":" YES!","rejected":" NOPE"}
+{"prompt":"Task: Reply with the exact token YES.\nAssistant:","chosen":" YES!","rejected":" NEVER"}
+{"prompt":"Task: Finish with the word HELLO.\nAssistant:","chosen":" HELLO","rejected":" BYE!!"}
+{"prompt":"Task: Finish with the word HELLO.\nAssistant:","chosen":" HELLO","rejected":" LATER"}
+{"prompt":"Instruction: say THANKS only.\nAssistant:","chosen":" THANKS","rejected":" REFUSE"}
+{"prompt":"Instruction: say THANKS only.\nAssistant:","chosen":" THANKS","rejected":" DECLIN"}

@@ -40,7 +40,7 @@ runs/
 pytorch_runs/
 *.log
 *.jsonl
-!review-stage/*.jsonl
+!review-stage/data/*.jsonl
 
 # Python
 __pycache__/
