@@ -34,7 +34,7 @@ python pytorch_alignment/gpt2_lora_finetune.py \
   --pretrained_dir gpt2_lora_finetune/pretrained/gpt2 \
   --data_dir data/wikitext2/wikitext-2-raw \
   --train_mode dpo \
-  --preference_jsonl review-stage/synthetic_dpo_smoke.jsonl \
+  --preference_jsonl review-stage/data/synthetic_dpo_smoke.jsonl \
   --lora_out pytorch_runs/gpt2_dpo_lora \
   --steps 10 --batch_size 2 --grad_accum_steps 1 \
   --seq_len 128 --rank 8 --alpha 16 --dpo_beta 0.1
@@ -89,7 +89,7 @@ python pytorch_alignment/gemma_lora_finetune.py \
   --model_dir gemma-3-270m \
   --data_dir data/wikitext2/wikitext-2-raw \
   --train_mode dpo \
-  --preference_jsonl review-stage/synthetic_dpo_smoke.jsonl \
+  --preference_jsonl review-stage/data/synthetic_dpo_smoke.jsonl \
   --output_dir pytorch_runs/gemma_dpo_lora \
   --max_steps 10 --batch 2 --seq_len 256 \
   --target_mode attn --lora_r 8 --lora_alpha 32 --dpo_beta 0.1
@@ -129,7 +129,7 @@ python pytorch_alignment/qwen_lora_finetune.py \
 python pytorch_alignment/qwen_lora_finetune.py \
   --model_dir Qwen2.5-0.5B \
   --train_mode dpo \
-  --preference_jsonl review-stage/synthetic_dpo_smoke.jsonl \
+  --preference_jsonl review-stage/data/synthetic_dpo_smoke.jsonl \
   --output_dir pytorch_runs/qwen_dpo_lora \
   --steps 10 --batch 2 --seq_len 256 \
   --target_mode qv --dpo_beta 0.1

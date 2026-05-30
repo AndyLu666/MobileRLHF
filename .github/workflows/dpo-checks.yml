@@ -39,7 +39,7 @@ jobs:
         run: python -m unittest tests.test_dpo_utils
 
       - name: Run DPO sanity smoke
-        run: PYTHONPATH=. python review-stage/dpo_sanity_check.py
+        run: PYTHONPATH=. python review-stage/scripts/dpo_sanity_check.py
 
       - name: Run DPO dataset diagnostic
-        run: PYTHONPATH=. python review-stage/dpo_dataset_diagnostic.py
+        run: PYTHONPATH=. python review-stage/scripts/dpo_dataset_diagnostic.py

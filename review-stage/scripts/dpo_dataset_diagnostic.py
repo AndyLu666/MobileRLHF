@@ -122,8 +122,8 @@ def main():
     steps = 60
     lr = 5e-3
 
-    weak_path = repo_root / "review-stage" / "synthetic_dpo_smoke.jsonl"
-    strong_path = repo_root / "review-stage" / "synthetic_dpo_high_quality.jsonl"
+    weak_path = repo_root / "review-stage" / "data" / "synthetic_dpo_smoke.jsonl"
+    strong_path = repo_root / "review-stage" / "data" / "synthetic_dpo_high_quality.jsonl"
 
     report = {
         "algorithm": {

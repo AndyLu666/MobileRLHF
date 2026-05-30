@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 MODEL_DIR="${MODEL_DIR:-$ROOT/gpt2_small_lora_finetune/pretrained/gpt2}"
-TRAIN_PREF="${TRAIN_PREF:-$ROOT/review-stage/synthetic_pref_from_sft_train.jsonl}"
-EVAL_PREF="${EVAL_PREF:-$ROOT/review-stage/synthetic_pref_from_sft_eval.jsonl}"
+TRAIN_PREF="${TRAIN_PREF:-$ROOT/review-stage/data/synthetic_pref_from_sft_train.jsonl}"
+EVAL_PREF="${EVAL_PREF:-$ROOT/review-stage/data/synthetic_pref_from_sft_eval.jsonl}"
 OUT_DIR="${OUT_DIR:-$ROOT/runs/gpt2_dpo_vs_sft}"
 SEQ_LEN="${SEQ_LEN:-128}"
 STEPS="${STEPS:-60}"
@@ -18,7 +18,7 @@ mkdir -p "$OUT_DIR"
 SFT_JSONL="$OUT_DIR/train_chosen_only.jsonl"
 
 echo "[1/5] Convert preference train set to chosen-only masked JSONL"
-$PYTHON "$ROOT/review-stage/preference_to_masked_jsonl.py" \
+$PYTHON "$ROOT/review-stage/scripts/preference_to_masked_jsonl.py" \
   --input "$TRAIN_PREF" \
   --output "$SFT_JSONL" \
   --tokenizer_dir "$MODEL_DIR" \
@@ -67,7 +67,7 @@ PYTHONPATH="$ROOT" $PYTHON "$ROOT/pytorch_alignment/gpt2_lora_finetune.py" \
   > "$OUT_DIR/sft_train.log" 2>&1
 
 echo "[4/5] Evaluate DPO adapter on held-out preference set"
-PYTHONPATH="$ROOT" $PYTHON "$ROOT/review-stage/eval_preference_model.py" \
+PYTHONPATH="$ROOT" $PYTHON "$ROOT/review-stage/scripts/eval_preference_model.py" \
   --base_model_dir "$MODEL_DIR" \
   --adapter_dir "$OUT_DIR/dpo_adapter" \
   --preference_jsonl "$EVAL_PREF" \
@@ -75,7 +75,7 @@ PYTHONPATH="$ROOT" $PYTHON "$ROOT/review-stage/eval_preference_model.py" \
   > "$OUT_DIR/dpo_eval.json"
 
 echo "[5/5] Evaluate SFT adapter on held-out preference set"
-PYTHONPATH="$ROOT" $PYTHON "$ROOT/review-stage/eval_preference_model.py" \
+PYTHONPATH="$ROOT" $PYTHON "$ROOT/review-stage/scripts/eval_preference_model.py" \
   --base_model_dir "$MODEL_DIR" \
   --adapter_dir "$OUT_DIR/sft_adapter" \
   --preference_jsonl "$EVAL_PREF" \

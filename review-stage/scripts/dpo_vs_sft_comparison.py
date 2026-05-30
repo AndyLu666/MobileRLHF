@@ -167,8 +167,8 @@ def main():
     steps = 60
     lr = 5e-3
     beta = 0.1
-    train_path = repo_root / "review-stage" / "synthetic_dpo_high_quality_train.jsonl"
-    eval_path = repo_root / "review-stage" / "synthetic_dpo_high_quality_eval.jsonl"
+    train_path = repo_root / "review-stage" / "data" / "synthetic_dpo_high_quality_train.jsonl"
+    eval_path = repo_root / "review-stage" / "data" / "synthetic_dpo_high_quality_eval.jsonl"
 
     train_preference_dataset = PreferenceDataset(str(train_path), tokenizer, seq_len=seq_len)
     train_preference_batch = dpo_collate_batch(
