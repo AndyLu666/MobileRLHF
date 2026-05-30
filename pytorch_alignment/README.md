@@ -5,7 +5,7 @@
 ## 可用脚本
 
 ### GPT-2 LoRA 微调
-**文件：** `gpt2_lora_finetune.py`  
+**文件：** `gpt2_lora_finetune.py`
 **对应：** `gpt2_lora_finetune/main.cpp`
 
 这是一个基于 PyTorch + PEFT 的 GPT-2 LoRA 训练实现，主要用于和 C++ 版本做对齐验证。
@@ -43,7 +43,7 @@ python pytorch_alignment/gpt2_lora_finetune.py \
 ---
 
 ### GPT-2 全参数微调
-**文件：** `gpt2_full_finetune.py`  
+**文件：** `gpt2_full_finetune.py`
 **用途：** 作为全参数微调对照基线
 
 **用法：**
@@ -58,7 +58,7 @@ python pytorch_alignment/gpt2_full_finetune.py \
 ---
 
 ### Gemma LoRA 微调
-**文件：** `gemma_lora_finetune.py`  
+**文件：** `gemma_lora_finetune.py`
 **对应：** `operators/finetune_ops/optim/train_lora_gemma.cpp`
 
 这是一个基于 PyTorch + PEFT 的 Gemma LoRA 训练实现。
@@ -98,7 +98,7 @@ python pytorch_alignment/gemma_lora_finetune.py \
 ---
 
 ### Qwen2.5-0.5B LoRA 微调
-**文件：** `qwen_lora_finetune.py`  
+**文件：** `qwen_lora_finetune.py`
 **对应：** `qwen_lora_finetune/src/wikitext_main.cpp` 和 `src/mmlu_main.cpp`
 
 默认支持 WikiText-2，也支持用于 masked causal LM 的 MMLU JSONL（`ids/mask`）模式。
