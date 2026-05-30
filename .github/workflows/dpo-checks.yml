@@ -1,0 +1,45 @@
+name: DPO Checks
+
+on:
+  pull_request:
+    paths:
+      - "pytorch_alignment/**"
+      - "review-stage/**"
+      - "tests/**"
+      - ".github/workflows/dpo-checks.yml"
+  push:
+    branches:
+      - main
+      - dpo-trainer-parity
+    paths:
+      - "pytorch_alignment/**"
+      - "review-stage/**"
+      - "tests/**"
+      - ".github/workflows/dpo-checks.yml"
+
+jobs:
+  dpo-sanity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch transformers peft
+
+      - name: Run DPO unit tests
+        run: python -m unittest tests.test_dpo_utils
+
+      - name: Run DPO sanity smoke
+        run: PYTHONPATH=. python review-stage/dpo_sanity_check.py
+
+      - name: Run DPO dataset diagnostic
+        run: PYTHONPATH=. python review-stage/dpo_dataset_diagnostic.py
