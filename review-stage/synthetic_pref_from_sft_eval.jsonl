@@ -1,0 +1,16 @@
+{"prompt": "Task: reply with the number 9 only.\nAssistant:", "chosen": " 9", "rejected": " 8"}
+{"prompt": "Task: reply with the word BYE only.\nAssistant:", "chosen": " BYE", "rejected": " BYEE"}
+{"prompt": "Task: answer the color of coal with one word.\nAssistant:", "chosen": " black", "rejected": " dark"}
+{"prompt": "Task: answer the opposite of left with one word.\nAssistant:", "chosen": " right", "rejected": " straight"}
+{"prompt": "Task: complete the sequence: Thursday, Friday, __.\nAssistant:", "chosen": " Saturday", "rejected": " Sunday"}
+{"prompt": "Task: complete the sequence: 5, 10, __.\nAssistant:", "chosen": " 15", "rejected": " 14"}
+{"prompt": "Task: what is 8 - 1? reply with one token.\nAssistant:", "chosen": " 7", "rejected": " 8"}
+{"prompt": "Task: what is the capital of Germany? one short answer.\nAssistant:", "chosen": " Berlin", "rejected": " Munich"}
+{"prompt": "Task: what is the capital of Spain? one short answer.\nAssistant:", "chosen": " Madrid", "rejected": " Barcelona"}
+{"prompt": "Task: reply with the animal that hops and has long ears.\nAssistant:", "chosen": " rabbit", "rejected": " bunny"}
+{"prompt": "Task: answer with the season after autumn.\nAssistant:", "chosen": " winter", "rejected": " autumn"}
+{"prompt": "Task: answer with the gas plants release in photosynthesis.\nAssistant:", "chosen": " oxygen", "rejected": " air"}
+{"prompt": "Task: reply with the word START only.\nAssistant:", "chosen": " START", "rejected": " BEGIN"}
+{"prompt": "Task: reply with the word STOP only.\nAssistant:", "chosen": " STOP", "rejected": " PAUSE"}
+{"prompt": "Task: answer with the shape that has five sides.\nAssistant:", "chosen": " pentagon", "rejected": " polygon"}
+{"prompt": "Task: answer with the planet humans live on.\nAssistant:", "chosen": " Earth", "rejected": " world"}

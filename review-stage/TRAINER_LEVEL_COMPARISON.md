@@ -12,8 +12,8 @@
 
 ## Inputs
 - A complete Hugging Face GPT-2 directory with config and tokenizer files
-- Train preference set
-- Held-out eval preference set
+- Chosen-only SFT train/eval sets
+- Preference train/eval sets derived from the same chosen-only base data
 
 ## Default command
 ```bash
@@ -22,7 +22,7 @@ bash review-stage/run_gpt2_dpo_vs_sft.sh
 
 ## Current status
 - Harness added
-- Not executed in this sandbox because the local GPT-2 directory only contains weights and lacks tokenizer/config files required by the existing trainer path
+- The newer default datasets use matched chosen-only SFT sources plus auto-generated near-miss rejected answers for DPO
 
 ## Next
 - Run the harness locally with a complete GPT-2 model directory
