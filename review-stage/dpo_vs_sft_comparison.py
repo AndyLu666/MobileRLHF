@@ -167,23 +167,35 @@ def main():
     steps = 60
     lr = 5e-3
     beta = 0.1
-    data_path = repo_root / "review-stage" / "synthetic_dpo_high_quality.jsonl"
+    train_path = repo_root / "review-stage" / "synthetic_dpo_high_quality_train.jsonl"
+    eval_path = repo_root / "review-stage" / "synthetic_dpo_high_quality_eval.jsonl"
 
-    preference_dataset = PreferenceDataset(str(data_path), tokenizer, seq_len=seq_len)
-    preference_batch = dpo_collate_batch([preference_dataset[i] for i in range(len(preference_dataset))])
-    preference_batch = {k: v.to(device) for k, v in preference_batch.items()}
+    train_preference_dataset = PreferenceDataset(str(train_path), tokenizer, seq_len=seq_len)
+    train_preference_batch = dpo_collate_batch(
+        [train_preference_dataset[i] for i in range(len(train_preference_dataset))]
+    )
+    train_preference_batch = {k: v.to(device) for k, v in train_preference_batch.items()}
 
-    chosen_only_dataset = ChosenOnlyDataset(data_path, tokenizer, seq_len=seq_len)
+    eval_preference_dataset = PreferenceDataset(str(eval_path), tokenizer, seq_len=seq_len)
+    eval_preference_batch = dpo_collate_batch(
+        [eval_preference_dataset[i] for i in range(len(eval_preference_dataset))]
+    )
+    eval_preference_batch = {k: v.to(device) for k, v in eval_preference_batch.items()}
+
+    chosen_only_dataset = ChosenOnlyDataset(train_path, tokenizer, seq_len=seq_len)
     sft_batch = {k: v.to(device) for k, v in chosen_only_dataset.collate().items()}
 
     dpo_model, ref_model = build_policy_and_reference(tokenizer.vocab_size, device)
     sft_model, _ = build_policy_and_reference(tokenizer.vocab_size, device)
 
-    before_metrics = evaluate_preference_policy(dpo_model, preference_batch)
-    train_dpo(dpo_model, ref_model, preference_batch, steps=steps, lr=lr, beta=beta)
+    train_before_metrics = evaluate_preference_policy(dpo_model, train_preference_batch)
+    eval_before_metrics = evaluate_preference_policy(dpo_model, eval_preference_batch)
+    train_dpo(dpo_model, ref_model, train_preference_batch, steps=steps, lr=lr, beta=beta)
     train_sft(sft_model, sft_batch, steps=steps, lr=lr)
-    dpo_after = evaluate_preference_policy(dpo_model, preference_batch)
-    sft_after = evaluate_preference_policy(sft_model, preference_batch)
+    dpo_train_after = evaluate_preference_policy(dpo_model, train_preference_batch)
+    dpo_eval_after = evaluate_preference_policy(dpo_model, eval_preference_batch)
+    sft_train_after = evaluate_preference_policy(sft_model, train_preference_batch)
+    sft_eval_after = evaluate_preference_policy(sft_model, eval_preference_batch)
 
     report = {
         "setup": {
@@ -192,16 +204,28 @@ def main():
             "steps": steps,
             "learning_rate": lr,
             "beta": beta,
-            "dataset": str(data_path.relative_to(repo_root)),
+            "train_dataset": str(train_path.relative_to(repo_root)),
+            "eval_dataset": str(eval_path.relative_to(repo_root)),
         },
-        "before_training": before_metrics,
-        "after_dpo": dpo_after,
-        "after_sft": sft_after,
+        "before_training": {
+            "train": train_before_metrics,
+            "eval": eval_before_metrics,
+        },
+        "after_dpo": {
+            "train": dpo_train_after,
+            "eval": dpo_eval_after,
+        },
+        "after_sft": {
+            "train": sft_train_after,
+            "eval": sft_eval_after,
+        },
         "comparison": {
-            "dpo_minus_sft_pair_accuracy": dpo_after["pair_accuracy"] - sft_after["pair_accuracy"],
-            "dpo_minus_sft_pair_margin": dpo_after["mean_pair_margin"] - sft_after["mean_pair_margin"],
-            "dpo_minus_sft_chosen_logprob_per_token": dpo_after["chosen_logprob_per_token"] - sft_after["chosen_logprob_per_token"],
-            "dpo_minus_sft_rejected_logprob_per_token": dpo_after["rejected_logprob_per_token"] - sft_after["rejected_logprob_per_token"],
+            "train_dpo_minus_sft_pair_accuracy": dpo_train_after["pair_accuracy"] - sft_train_after["pair_accuracy"],
+            "train_dpo_minus_sft_pair_margin": dpo_train_after["mean_pair_margin"] - sft_train_after["mean_pair_margin"],
+            "eval_dpo_minus_sft_pair_accuracy": dpo_eval_after["pair_accuracy"] - sft_eval_after["pair_accuracy"],
+            "eval_dpo_minus_sft_pair_margin": dpo_eval_after["mean_pair_margin"] - sft_eval_after["mean_pair_margin"],
+            "eval_dpo_minus_sft_chosen_logprob_per_token": dpo_eval_after["chosen_logprob_per_token"] - sft_eval_after["chosen_logprob_per_token"],
+            "eval_dpo_minus_sft_rejected_logprob_per_token": dpo_eval_after["rejected_logprob_per_token"] - sft_eval_after["rejected_logprob_per_token"],
         },
     }
     print(json.dumps(report, indent=2))
