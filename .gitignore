@@ -22,6 +22,9 @@ cmake_install.cmake
 gemma-3-270m/
 gemma-3-1b/
 gpt2_lora_finetune/pretrained/
+gpt2_small_lora_finetune/pretrained/
+gpt2_medium_lora_finetune/pretrained/
+qwen_lora_finetune/pretrained/
 data/wikitext2/
 data/pretokenized/
 data/mmlu/data.tar

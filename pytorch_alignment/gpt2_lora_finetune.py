@@ -37,6 +37,7 @@ class WikiTextExample:
     attention_mask: torch.Tensor
 
 
+@dataclass
 class JsonlMaskedExample:
     input_ids: torch.Tensor
     attention_mask: torch.Tensor

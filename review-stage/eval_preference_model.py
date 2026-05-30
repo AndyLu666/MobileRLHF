@@ -1,5 +1,6 @@
 import argparse
 import json
+from typing import Optional
 
 import torch
 from peft import PeftModel
@@ -8,7 +9,7 @@ from transformers import GPT2LMHeadModel, GPT2TokenizerFast
 from pytorch_alignment.dpo_utils import PreferenceDataset, dpo_collate_batch, sequence_logprob
 
 
-def build_model(base_dir: str, adapter_dir: str | None, device: torch.device):
+def build_model(base_dir: str, adapter_dir: Optional[str], device: torch.device):
     model = GPT2LMHeadModel.from_pretrained(base_dir)
     if adapter_dir:
         model = PeftModel.from_pretrained(model, adapter_dir, is_trainable=False)
