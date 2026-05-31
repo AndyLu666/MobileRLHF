@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PYTHON="${PYTHON:-python3}"
 MODEL_DIR="${MODEL_DIR:-$ROOT/gpt2_small_lora_finetune/pretrained/gpt2}"
-TRAIN_PREF="${TRAIN_PREF:-$ROOT/review-stage/data/synthetic_pref_from_sft_train.jsonl}"
-EVAL_PREF="${EVAL_PREF:-$ROOT/review-stage/data/synthetic_pref_from_sft_eval.jsonl}"
+TRAIN_PREF="${TRAIN_PREF:-$ROOT/review-stage/data/synthetic_mmlu_style_pref_train.jsonl}"
+EVAL_PREF="${EVAL_PREF:-$ROOT/review-stage/data/synthetic_mmlu_style_pref_eval.jsonl}"
 OUT_DIR="${OUT_DIR:-$ROOT/runs/gpt2_dpo_vs_sft}"
 SEQ_LEN="${SEQ_LEN:-128}"
 STEPS="${STEPS:-60}"

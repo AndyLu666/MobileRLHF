@@ -1,0 +1,120 @@
+{"prompt": "Question: What is 10 x 7?\nA. 60\nB. 77\nC. 70\nD. 71\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 25 / 5?\nA. 5\nB. 6\nC. 4\nD. 7\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 57 - 8?\nA. 50\nB. 49\nC. 48\nD. 51\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10% of 12?\nA. 1\nB. 2\nC. 0\nD. 3\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 17, 19, 21, ?\nA. 23\nB. 24\nC. 22\nD. 25\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is half of 31?\nA. 16\nB. 14\nC. 15.5\nD. 17\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which fraction is equivalent to 4/6?\nA. 5/12\nB. 8/12\nC. 8/13\nD. 6/8\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 12 + 7?\nA. 19\nB. 18\nC. 20\nD. 21\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is half of 23?\nA. 12\nB. 10\nC. 11.5\nD. 13\nAnswer:", "chosen": " C", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 33 - 6?\nA. 28\nB. 27\nC. 26\nD. 29\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 18 + 3?\nA. 21\nB. 20\nC. 22\nD. 23\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 10, 12, 14, ?\nA. 16\nB. 17\nC. 15\nD. 18\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 36 / 6?\nA. 6\nB. 7\nC. 5\nD. 8\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 4, 6, 8, ?\nA. 10\nB. 11\nC. 9\nD. 12\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 51 - 4?\nA. 48\nB. 47\nC. 46\nD. 49\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 12, 24, 48, ?\nA. 108\nB. 96\nC. 84\nD. 120\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 9 x 4?\nA. 27\nB. 40\nC. 36\nD. 37\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 19 + 9?\nA. 28\nB. 27\nC. 29\nD. 30\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 12 + 3?\nA. 15\nB. 14\nC. 16\nD. 17\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 30 - 7?\nA. 24\nB. 23\nC. 22\nD. 25\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10 x 6?\nA. 50\nB. 66\nC. 60\nD. 61\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 33 - 7?\nA. 27\nB. 26\nC. 25\nD. 28\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10% of 15?\nA. 1\nB. 2\nC. 0\nD. 3\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 31 + 9?\nA. 40\nB. 39\nC. 41\nD. 42\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 24 / 6?\nA. 4\nB. 5\nC. 3\nD. 6\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 37 + 8?\nA. 45\nB. 44\nC. 46\nD. 47\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 70 / 5?\nA. 14\nB. 15\nC. 13\nD. 16\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 30 + 8?\nA. 38\nB. 37\nC. 39\nD. 40\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which word is closest in meaning to 'brief'?\nA. short\nB. heavy\nC. noisy\nD. late\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 26 + 3?\nA. 29\nB. 28\nC. 30\nD. 31\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 39 - 4?\nA. 36\nB. 35\nC. 34\nD. 37\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 31 + 7?\nA. 38\nB. 37\nC. 39\nD. 40\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 13 + 6?\nA. 19\nB. 18\nC. 20\nD. 21\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 18 + 6?\nA. 24\nB. 23\nC. 25\nD. 26\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: How many centimeters are in 21 meters?\nA. 2090\nB. 2100\nC. 2110\nD. 2200\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 70 / 7?\nA. 10\nB. 11\nC. 9\nD. 12\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: How many minutes are in 4 hours?\nA. 240\nB. 270\nC. 210\nD. 300\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 34 + 6?\nA. 40\nB. 39\nC. 41\nD. 42\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 37 + 9?\nA. 46\nB. 45\nC. 47\nD. 48\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is the capital of Egypt?\nA. Alexandria\nB. Cairo\nC. Giza\nD. Luxor\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 42 - 2?\nA. 41\nB. 40\nC. 39\nD. 42\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which layer is responsible for routing packets between networks?\nA. Physical layer\nB. Transport layer\nC. Network layer\nD. Session layer\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 5 x 6?\nA. 25\nB. 36\nC. 30\nD. 31\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 20 + 8?\nA. 28\nB. 27\nC. 29\nD. 30\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which sentence uses correct punctuation?\nA. Lets eat, grandma.\nB. Let's eat, grandma.\nC. Lets eat grandma.\nD. Let's eat grandma.\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 75 / 5?\nA. 15\nB. 16\nC. 14\nD. 17\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 39 - 5?\nA. 35\nB. 34\nC. 33\nD. 36\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 24 / 4?\nA. 6\nB. 7\nC. 5\nD. 8\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 13 + 9?\nA. 22\nB. 21\nC. 23\nD. 24\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 32 / 4?\nA. 8\nB. 9\nC. 7\nD. 10\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 24 + 9?\nA. 33\nB. 32\nC. 34\nD. 35\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 39 + 7?\nA. 46\nB. 45\nC. 47\nD. 48\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 14 + 5?\nA. 19\nB. 18\nC. 20\nD. 21\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 18 / 6?\nA. 3\nB. 4\nC. 2\nD. 5\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 48 / 4?\nA. 12\nB. 13\nC. 11\nD. 14\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: How many centimeters are in 6 meters?\nA. 590\nB. 600\nC. 610\nD. 700\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 22 + 8?\nA. 30\nB. 29\nC. 31\nD. 32\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 26 / 2?\nA. 13\nB. 14\nC. 12\nD. 15\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is half of 17?\nA. 9\nB. 7\nC. 8.5\nD. 10\nAnswer:", "chosen": " C", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 12 / 4?\nA. 3\nB. 4\nC. 2\nD. 5\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 36 + 9?\nA. 45\nB. 44\nC. 46\nD. 47\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 54 - 4?\nA. 51\nB. 50\nC. 49\nD. 52\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which organ pumps blood through the human body?\nA. Lung\nB. Liver\nC. Heart\nD. Kidney\nAnswer:", "chosen": " C", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 24 + 3?\nA. 27\nB. 26\nC. 28\nD. 29\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 38 + 6?\nA. 44\nB. 43\nC. 45\nD. 46\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 16 + 7?\nA. 23\nB. 22\nC. 24\nD. 25\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 8, 10, 12, ?\nA. 14\nB. 15\nC. 13\nD. 16\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 30 / 3?\nA. 10\nB. 11\nC. 9\nD. 12\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 119 / 7?\nA. 17\nB. 18\nC. 16\nD. 19\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 19, 21, 23, ?\nA. 25\nB. 26\nC. 24\nD. 27\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What gas do plants primarily absorb for photosynthesis?\nA. Oxygen\nB. Carbon dioxide\nC. Nitrogen\nD. Hydrogen\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which fraction is equivalent to 1/3?\nA. 2/6\nB. 2/6\nC. 2/7\nD. 3/5\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 80 / 4?\nA. 20\nB. 21\nC. 19\nD. 22\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 11, 13, 15, ?\nA. 17\nB. 18\nC. 16\nD. 19\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 42 / 3?\nA. 14\nB. 15\nC. 13\nD. 16\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 13 + 8?\nA. 21\nB. 20\nC. 22\nD. 23\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10 x 4?\nA. 30\nB. 44\nC. 40\nD. 41\nAnswer:", "chosen": " C", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 6, 12, 24, ?\nA. 54\nB. 48\nC. 42\nD. 60\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 30 - 3?\nA. 28\nB. 27\nC. 26\nD. 29\nAnswer:", "chosen": " B", "rejected": " A", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is the capital of India?\nA. New Delhi\nB. Mumbai\nC. Bengaluru\nD. Chennai\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 20, 22, 24, ?\nA. 26\nB. 27\nC. 25\nD. 28\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 28 / 7?\nA. 4\nB. 5\nC. 3\nD. 6\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 8 x 6?\nA. 40\nB. 54\nC. 48\nD. 49\nAnswer:", "chosen": " C", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 17 + 5?\nA. 22\nB. 21\nC. 23\nD. 24\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: How many grams are in 10 kilograms?\nA. 10100\nB. 9900\nC. 10000\nD. 11000\nAnswer:", "chosen": " C", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 54 - 7?\nA. 48\nB. 47\nC. 46\nD. 49\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is the capital of Italy?\nA. Milan\nB. Naples\nC. Rome\nD. Turin\nAnswer:", "chosen": " C", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 114 / 6?\nA. 19\nB. 20\nC. 18\nD. 21\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 6 x 4?\nA. 18\nB. 28\nC. 24\nD. 25\nAnswer:", "chosen": " C", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 15 + 3?\nA. 18\nB. 17\nC. 19\nD. 20\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 30 + 6?\nA. 36\nB. 35\nC. 37\nD. 38\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 32 + 8?\nA. 40\nB. 39\nC. 41\nD. 42\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 25 + 6?\nA. 31\nB. 30\nC. 32\nD. 33\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 18 + 5?\nA. 23\nB. 22\nC. 24\nD. 25\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 26 + 9?\nA. 35\nB. 34\nC. 36\nD. 37\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: How many minutes are in 12 hours?\nA. 720\nB. 750\nC. 690\nD. 780\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10 x 5?\nA. 40\nB. 55\nC. 50\nD. 51\nAnswer:", "chosen": " C", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 12 + 9?\nA. 21\nB. 20\nC. 22\nD. 23\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 22 + 4?\nA. 26\nB. 25\nC. 27\nD. 28\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 60 / 6?\nA. 10\nB. 11\nC. 9\nD. 12\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is half of 30?\nA. 16\nB. 14\nC. 15.0\nD. 17\nAnswer:", "chosen": " C", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 120 / 6?\nA. 20\nB. 21\nC. 19\nD. 22\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 12 + 4?\nA. 16\nB. 15\nC. 17\nD. 18\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 35 + 9?\nA. 44\nB. 43\nC. 45\nD. 46\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 45 - 8?\nA. 38\nB. 37\nC. 36\nD. 39\nAnswer:", "chosen": " B", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 9 / 3?\nA. 3\nB. 4\nC. 2\nD. 5\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10% of 23?\nA. 2\nB. 3\nC. 1\nD. 4\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 21 / 7?\nA. 3\nB. 4\nC. 2\nD. 5\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 31 + 8?\nA. 39\nB. 38\nC. 40\nD. 41\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 35 + 5?\nA. 40\nB. 39\nC. 41\nD. 42\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is half of 32?\nA. 17\nB. 15\nC. 16.0\nD. 18\nAnswer:", "chosen": " C", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 16 / 4?\nA. 4\nB. 5\nC. 3\nD. 6\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 6 / 2?\nA. 3\nB. 4\nC. 2\nD. 5\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 10% of 24?\nA. 2\nB. 3\nC. 1\nD. 4\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: Which number best completes the pattern 16, 32, 64, ?\nA. 144\nB. 128\nC. 112\nD. 160\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 22 / 2?\nA. 11\nB. 12\nC. 10\nD. 13\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 17 + 7?\nA. 24\nB. 23\nC. 25\nD. 26\nAnswer:", "chosen": " A", "rejected": " B", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 27 + 8?\nA. 35\nB. 34\nC. 36\nD. 37\nAnswer:", "chosen": " A", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 54 - 8?\nA. 47\nB. 46\nC. 45\nD. 48\nAnswer:", "chosen": " B", "rejected": " D", "generator_mode": "mcq_letter"}
+{"prompt": "Question: What is 105 / 7?\nA. 15\nB. 16\nC. 14\nD. 17\nAnswer:", "chosen": " A", "rejected": " C", "generator_mode": "mcq_letter"}
