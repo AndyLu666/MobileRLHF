@@ -8,7 +8,9 @@ def repo_root() -> str:
 BASE = repo_root()
 MMLU_DATA_DIR = os.path.join(BASE, "data/mmlu/data")
 OUT_DIR = os.path.join(BASE, "runs/mmlu_jsonl_gpt2_s128")
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "pretrained")
+MODEL_DIR = os.path.join(os.path.dirname(__file__), "pretrained", "gpt2")
+if not os.path.exists(MODEL_DIR):
+    MODEL_DIR = os.path.join(os.path.dirname(__file__), "pretrained")
 SEQ_LEN = 128
 SEED = 123
 SPLIT_RATIO = 0.9  # 90% train / 10% valid
@@ -84,5 +86,4 @@ with open(os.path.join(OUT_DIR, 'valid.jsonl'), 'w', encoding='utf-8') as f:
         f.write(json.dumps({'ids': ids, 'mask': mask}, ensure_ascii=False) + '\n')
 
 print(f"Done. train={len(train_pairs)} valid={len(valid_pairs)} out={OUT_DIR}")
-
 
