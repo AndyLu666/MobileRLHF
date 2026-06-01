@@ -281,13 +281,17 @@ TensorPtr Tensor::reshape(const std::vector<int64_t>& new_shape) const {
 
     if (requires_grad_) {
         result->set_requires_grad(true);
-        
-        // [Translated comment removed - see documentation]
+        #ifdef USE_NEW_AUTOGRAD_ENGINE
+        auto input_ptr = shared_from_this_or_clone();
+        auto backward_fn = std::make_shared<ReshapeBackward>(shape_);
+        autograd::Engine::instance().register_node(result, {input_ptr}, backward_fn);
+        #else
         auto original_shape = shape_;
         result->set_grad_fn([original_shape](const TensorPtr& grad_output) -> std::vector<TensorPtr> {
             auto grad_input = grad_output->reshape(original_shape);
             return {grad_input};
         });
+        #endif
     }
 
     return result;
@@ -356,13 +360,16 @@ TensorPtr Tensor::transpose(int dim0, int dim1) const {
 
     if (requires_grad_) {
         result->set_requires_grad(true);
-        
-                // [Translated]
+        #ifdef USE_NEW_AUTOGRAD_ENGINE
+        auto input_ptr = shared_from_this_or_clone();
+        auto backward_fn = std::make_shared<TransposeBackward>(dim0, dim1);
+        autograd::Engine::instance().register_node(result, {input_ptr}, backward_fn);
+        #else
         result->set_grad_fn([dim0, dim1](const TensorPtr& grad_output) -> std::vector<TensorPtr> {
-            // [Translated comment removed - see documentation]
             auto grad_input = grad_output->transpose(dim0, dim1);
             return {grad_input};
         });
+        #endif
     }
 
     return result;

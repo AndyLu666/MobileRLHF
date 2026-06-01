@@ -123,6 +123,7 @@ void PreferenceDataset::load(PreferenceSplit split) {
     order_.clear();
     kept_samples_ = 0;
     skipped_samples_ = 0;
+    identical_after_truncation_ = 0;
     cursor_ = 0;
 
     const std::string path = path_for_split(split);
@@ -158,6 +159,14 @@ void PreferenceDataset::load(PreferenceSplit split) {
             sample.rejected_response_mask);
 
         if (!chosen_ok || !rejected_ok) {
+            skipped_samples_++;
+            continue;
+        }
+
+        if (sample.chosen_input_ids == sample.rejected_input_ids &&
+            sample.chosen_attention_mask == sample.rejected_attention_mask &&
+            sample.chosen_response_mask == sample.rejected_response_mask) {
+            identical_after_truncation_++;
             skipped_samples_++;
             continue;
         }
@@ -243,6 +252,7 @@ void PreferenceDataset::print_stats() const {
     std::cout << "[PreferenceDataset] samples=" << samples_.size()
               << " kept=" << kept_samples_
               << " skipped=" << skipped_samples_
+              << " identical_after_truncation=" << identical_after_truncation_
               << " batch_size=" << cfg_.batch_size
               << " seq_len=" << cfg_.seq_len
               << std::endl;

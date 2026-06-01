@@ -120,6 +120,9 @@ public:
     void print_model_info() const;
     
     const GPT2Config& config() const { return config_; }
+    void set_use_memory_efficient_attention(bool enabled) {
+        config_.use_memory_efficient_attention = enabled;
+    }
 
     // ========================= Getters for LoRA binding =========================
     // Return writable pointers (TensorPtr*) so the LoRA injector can attach to layer params
@@ -174,4 +177,3 @@ private:
 };
 
 }  // namespace ops
-

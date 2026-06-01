@@ -556,29 +556,12 @@ TensorPtr GPT2Model::forward_block(const TensorPtr& x_in,
         printf("[DEBUG] Layer 11 QKV output (before split): mean=%10.6f, std=%10.6f\n", mean, std);
     }
     
-    // Split Q/K/V in order: q, k, v
-    const float* qkv_data = qkv->data<float>();
-    
-    auto q = zeros({B, S, C}, kFloat32, kCPU);
-    auto k = zeros({B, S, C}, kFloat32, kCPU);
-    auto v = zeros({B, S, C}, kFloat32, kCPU);
-    
-    float* q_data = q->data<float>();
-    float* k_data = k->data<float>();
-    float* v_data = v->data<float>();
-    
-    for (int64_t b = 0; b < B; ++b) {
-        for (int64_t s = 0; s < S; ++s) {
-            const float* qkv_ptr = qkv_data + (b * S + s) * 3 * C;
-            float* q_ptr = q_data + (b * S + s) * C;
-            float* k_ptr = k_data + (b * S + s) * C;
-            float* v_ptr = v_data + (b * S + s) * C;
-            
-            std::memcpy(q_ptr, qkv_ptr, C * sizeof(float));           // q
-            std::memcpy(k_ptr, qkv_ptr + C, C * sizeof(float));       // k
-            std::memcpy(v_ptr, qkv_ptr + 2 * C, C * sizeof(float));   // v
-        }
-    }
+    // Split Q/K/V in order: q, k, v.
+    // Use tensor slices instead of manual copies so gradients can flow from
+    // downstream attention back into the fused qkv projection and LoRA params.
+    auto q = qkv->slice(2, 0, C);
+    auto k = qkv->slice(2, C, 2 * C);
+    auto v = qkv->slice(2, 2 * C, 3 * C);
     
     // 🔍 DEBUG: Layer 11 QKV statistics after split
     if (GPT2_DEBUG_PRINT && block_idx == 11) {

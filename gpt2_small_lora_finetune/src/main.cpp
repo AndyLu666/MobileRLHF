@@ -229,6 +229,11 @@ int main(int argc, char** argv) {
         // Load size dynamically from HF config.json (supports gpt2 / gpt2-medium / gpt2-large / gpt2-xl)
         GPT2Config cfg = GPT2Config::from_pretrained(args.pretrained_dir + "/config.json");
         GPT2Model model(cfg);
+        if (args.train_mode == "dpo") {
+            // Native memory-efficient attention currently has a placeholder backward
+            // that returns zero grads. Force the standard path for DPO training.
+            model.set_use_memory_efficient_attention(false);
+        }
         model.tie_weights();
         model.print_model_info();
 
@@ -316,6 +321,10 @@ int main(int argc, char** argv) {
         tokenizer.load();
 
         if (args.train_mode == "dpo") {
+            if (args.preference_train.empty() || args.preference_valid.empty()) {
+                throw runtime_error("DPO mode requires --preference_train and --preference_valid");
+            }
+
             PreferenceDatasetConfig pref_cfg;
             pref_cfg.train_path = args.preference_train;
             pref_cfg.valid_path = args.preference_valid;
@@ -333,9 +342,354 @@ int main(int argc, char** argv) {
             valid_pref_dataset.load(PreferenceSplit::Valid);
             valid_pref_dataset.print_stats();
 
-            cout << "  ⚠️ Native DPO CLI plumbing is in place, but policy-gradient backward/reference-model "
-                    "training is not wired into the GPT-2 loop yet." << endl;
-            cout << "  ⚠️ Next step is to connect issue #13/#14 into the training loop." << endl;
+            GPT2Model ref_model(cfg);
+            ref_model.set_use_memory_efficient_attention(false);
+            ref_model.tie_weights();
+            for (const auto& kv : loaded) {
+                ref_model.assign_weight(kv.first, kv.second);
+            }
+            cout << "  ✓ Reference model loaded (frozen scoring only)" << endl;
+
+            const int64_t train_pairs = static_cast<int64_t>(train_pref_dataset.num_samples());
+            const int64_t micro_bs = args.batch_size;
+            const int64_t accum = max(1, args.grad_accum_steps);
+            const int64_t steps_per_epoch = (train_pairs + micro_bs * accum - 1) / (micro_bs * accum);
+            if (args.epochs > 0) {
+                args.steps = steps_per_epoch * args.epochs;
+            }
+
+            cout << "\n[Training plan]" << endl;
+            cout << "  epochs         : " << args.epochs << endl;
+            cout << "  steps_per_epoch: " << steps_per_epoch << endl;
+            cout << "  total_steps    : " << args.steps << endl;
+            cout << "  Effective batch: " << (micro_bs * accum) << " (micro=" << micro_bs
+                 << " × accum=" << accum << ")" << endl;
+
+            cout << "\n[4/6] Init optimizer..." << endl;
+            AdamConfig opt_cfg;
+            opt_cfg.learning_rate = args.lr;
+            opt_cfg.beta1 = 0.9f;
+            opt_cfg.beta2 = 0.999f;
+            opt_cfg.epsilon = 1e-8f;
+            opt_cfg.weight_decay = args.weight_decay;
+            opt_cfg.clip_grad_norm = args.clip_grad_norm;
+            Adam optimizer(opt_cfg);
+            cout << "  ✓ Adam optimizer ready" << endl;
+
+            auto count_response_tokens = [](const TensorPtr& mask) -> int64_t {
+                if (!mask) return 0;
+                const int32_t* ptr = mask->data<int32_t>();
+                int64_t total = 0;
+                for (int64_t i = 0; i < mask->numel(); ++i) {
+                    total += (ptr[i] != 0) ? 1 : 0;
+                }
+                return total;
+            };
+
+            auto lr_schedule = [&](int step) -> float {
+                const float base_lr = args.lr;
+                const int T = args.steps;
+                const int W = max(0, args.warmup_steps);
+                if (step < W) {
+                    return base_lr * (float(step + 1) / float(max(1, W)));
+                }
+                const int s = step - W;
+                const int d = max(1, T - W);
+                const float min_lr = 0.1f * base_lr;
+                const float PI = acosf(-1.0f);
+                const float cosv = 0.5f * (1.0f + cos(PI * float(s) / float(d)));
+                return min_lr + (base_lr - min_lr) * cosv;
+            };
+
+            auto clip_and_get_grad_norm = [&](float max_norm) -> float {
+                double norm_sq = 0.0;
+                for (const auto& p : trainable) {
+                    auto grad = p->grad();
+                    if (!grad) continue;
+                    const float* g = grad->data<float>();
+                    for (int64_t i = 0; i < grad->numel(); ++i) {
+                        norm_sq += double(g[i]) * double(g[i]);
+                    }
+                }
+                float norm = float(sqrt(norm_sq));
+                if (max_norm > 0.0f && norm > max_norm) {
+                    float scale = max_norm / (norm + 1e-6f);
+                    for (const auto& p : trainable) {
+                        auto grad = p->grad();
+                        if (!grad) continue;
+                        float* g = grad->data<float>();
+                        for (int64_t i = 0; i < grad->numel(); ++i) {
+                            g[i] *= scale;
+                        }
+                    }
+                    norm = max_norm;
+                }
+                return norm;
+            };
+
+            auto count_nonzero_grad_tensors = [&]() -> int {
+                int count = 0;
+                for (const auto& p : trainable) {
+                    auto grad = p->grad();
+                    if (!grad) continue;
+                    const float* g = grad->data<float>();
+                    bool nonzero = false;
+                    for (int64_t i = 0; i < grad->numel(); ++i) {
+                        if (std::fabs(g[i]) > 1e-12f) {
+                            nonzero = true;
+                            break;
+                        }
+                    }
+                    if (nonzero) count++;
+                }
+                return count;
+            };
+
+            auto evaluate_valid_dpo = [&]() -> DPOMetrics {
+                struct NoGradGuard {
+                    NoGradGuard() { ops::autograd::Engine::instance().set_enabled(false); }
+                    ~NoGradGuard() {
+                        ops::autograd::Engine::instance().clear_graph();
+                        ops::autograd::Engine::instance().set_enabled(true);
+                    }
+                } _nograd_guard;
+
+                valid_pref_dataset.reset_cursor();
+                double loss_sum = 0.0;
+                double chosen_reward_sum = 0.0;
+                double rejected_reward_sum = 0.0;
+                double reward_margin_sum = 0.0;
+                double reward_acc_sum = 0.0;
+                int64_t sample_sum = 0;
+                int processed = 0;
+
+                while (processed < args.eval_batches) {
+                    auto batch = valid_pref_dataset.next_batch(false);
+                    if (!batch.chosen_input_ids) break;
+
+                    auto policy_chosen_logits = model.forward(
+                        batch.chosen_input_ids, batch.chosen_attention_mask);
+                    auto policy_rejected_logits = model.forward(
+                        batch.rejected_input_ids, batch.rejected_attention_mask);
+                    auto ref_chosen_logits = ref_model.forward(
+                        batch.chosen_input_ids, batch.chosen_attention_mask);
+                    auto ref_rejected_logits = ref_model.forward(
+                        batch.rejected_input_ids, batch.rejected_attention_mask);
+
+                    auto metrics = compute_dpo_metrics_from_logits(
+                        policy_chosen_logits,
+                        policy_rejected_logits,
+                        ref_chosen_logits,
+                        ref_rejected_logits,
+                        batch.chosen_input_ids,
+                        batch.rejected_input_ids,
+                        batch.chosen_response_mask,
+                        batch.rejected_response_mask,
+                        args.dpo_beta);
+
+                    const int64_t batch_samples = static_cast<int64_t>(batch.num_samples);
+                    loss_sum += static_cast<double>(metrics.loss) * static_cast<double>(batch_samples);
+                    chosen_reward_sum += static_cast<double>(metrics.chosen_reward) * static_cast<double>(batch_samples);
+                    rejected_reward_sum += static_cast<double>(metrics.rejected_reward) * static_cast<double>(batch_samples);
+                    reward_margin_sum += static_cast<double>(metrics.reward_margin) * static_cast<double>(batch_samples);
+                    reward_acc_sum += static_cast<double>(metrics.reward_accuracy) * static_cast<double>(batch_samples);
+                    sample_sum += batch_samples;
+                    processed++;
+                }
+
+                if (sample_sum == 0) {
+                    DPOMetrics empty;
+                    empty.loss = 1e9f;
+                    return empty;
+                }
+
+                const double inv_n = 1.0 / static_cast<double>(sample_sum);
+                DPOMetrics out;
+                out.loss = static_cast<float>(loss_sum * inv_n);
+                out.chosen_reward = static_cast<float>(chosen_reward_sum * inv_n);
+                out.rejected_reward = static_cast<float>(rejected_reward_sum * inv_n);
+                out.reward_margin = static_cast<float>(reward_margin_sum * inv_n);
+                out.reward_accuracy = static_cast<float>(reward_acc_sum * inv_n);
+                return out;
+            };
+
+            cout << "\n[5/6] Start training..." << endl;
+            cout << "========================================\n" << endl;
+
+            double ema_loss = 0.0;
+            bool ema_initialized = false;
+            int64_t total_tokens = 0;
+            double rss_peak_mb = 0.0;
+
+            for (int step = start_step; step < args.steps; ++step) {
+                const int cur_epoch = step / steps_per_epoch + 1;
+                const int step_in_epoch = step % steps_per_epoch + 1;
+
+                double accum_loss = 0.0;
+                int64_t accum_tokens = 0;
+                auto rss_to_mb = []() -> double {
+                    size_t bytes = MemoryMonitor::get_system_memory_usage();
+                    return static_cast<double>(bytes) / (1024.0 * 1024.0);
+                };
+                double rss_pre_max = 0.0, rss_fwd_max = 0.0, rss_bwd_max = 0.0, rss_opt_max = 0.0, rss_post_max = 0.0;
+                rss_pre_max = std::max(rss_pre_max, rss_to_mb());
+
+                for (int acc = 0; acc < accum; ++acc) {
+                    auto batch = train_pref_dataset.next_batch();
+                    auto policy_chosen_logits = model.forward(
+                        batch.chosen_input_ids, batch.chosen_attention_mask);
+                    auto policy_rejected_logits = model.forward(
+                        batch.rejected_input_ids, batch.rejected_attention_mask);
+                    auto ref_chosen_logits = ref_model.forward(
+                        batch.chosen_input_ids, batch.chosen_attention_mask);
+                    auto ref_rejected_logits = ref_model.forward(
+                        batch.rejected_input_ids, batch.rejected_attention_mask);
+                    rss_fwd_max = std::max(rss_fwd_max, rss_to_mb());
+
+                    auto loss = dpo_loss(
+                        policy_chosen_logits,
+                        policy_rejected_logits,
+                        ref_chosen_logits,
+                        ref_rejected_logits,
+                        batch.chosen_input_ids,
+                        batch.rejected_input_ids,
+                        batch.chosen_response_mask,
+                        batch.rejected_response_mask,
+                        args.dpo_beta);
+                    if (step == start_step && acc == 0) {
+                        if (!policy_chosen_logits->requires_grad() ||
+                            !policy_rejected_logits->requires_grad() ||
+                            !loss->requires_grad()) {
+                            throw runtime_error(
+                                "DPO debug: policy logits or loss are not attached to autograd");
+                        }
+                    }
+                    float loss_val = loss->data<float>()[0];
+                    accum_loss += loss_val;
+                    accum_tokens += count_response_tokens(batch.chosen_response_mask);
+                    accum_tokens += count_response_tokens(batch.rejected_response_mask);
+
+                    float inv_accum = 1.0f / float(accum);
+                    auto scaled_loss = mul(loss, inv_accum);
+                    scaled_loss->backward();
+                    rss_bwd_max = std::max(rss_bwd_max, rss_to_mb());
+                }
+
+                float grad_norm = clip_and_get_grad_norm(args.clip_grad_norm);
+                int nonzero_grad_tensors = count_nonzero_grad_tensors();
+                float cur_lr = lr_schedule(step);
+                optimizer.set_learning_rate(cur_lr);
+
+                vector<TensorPtr> grads;
+                grads.reserve(trainable.size());
+                for (const auto& p : trainable) {
+                    grads.push_back(p->grad());
+                }
+                optimizer.step(trainable, grads);
+                for (auto& p : trainable) {
+                    p->zero_grad();
+                }
+                rss_opt_max = std::max(rss_opt_max, rss_to_mb());
+
+                if (((step + 1) % 50) == 0) {
+                    MemoryManager::instance().force_cleanup();
+                }
+                if (((step + 1) % 100) == 0) {
+                    MemoryManager::instance().clear_unused_memory();
+                }
+                MemoryManager::instance().cleanup_dead_references();
+                rss_post_max = std::max(rss_post_max, rss_to_mb());
+                double rss_step_max = std::max({rss_pre_max, rss_fwd_max, rss_bwd_max, rss_opt_max, rss_post_max});
+                rss_peak_mb = std::max(rss_peak_mb, rss_step_max);
+
+                float avg_loss = float(accum_loss / double(accum));
+                total_tokens += accum_tokens;
+                if (!ema_initialized) {
+                    ema_loss = avg_loss;
+                    ema_initialized = true;
+                } else {
+                    double beta = max(0.0, min(0.9999, double(args.ema_beta)));
+                    ema_loss = beta * ema_loss + (1.0 - beta) * avg_loss;
+                }
+
+                if ((step + 1) % max(1, args.log_interval) == 0) {
+                    cout << "[Train] epoch " << cur_epoch << "/" << args.epochs
+                         << " | step " << step_in_epoch << "/" << steps_per_epoch
+                         << " (global " << (step + 1) << "/" << args.steps << ")"
+                         << " | lr " << fixed << setprecision(6) << cur_lr
+                         << " | dpo_loss " << setprecision(4) << avg_loss
+                         << " | grad_norm " << setprecision(6) << grad_norm
+                         << " | nonzero_grad_tensors " << nonzero_grad_tensors
+                         << " | resp_tokens " << accum_tokens
+                         << " | RSS(pre/fwd/bwd/opt/post)="
+                         << fixed << setprecision(1)
+                         << rss_pre_max << "/" << rss_fwd_max << "/"
+                         << rss_bwd_max << "/" << rss_opt_max << "/"
+                         << rss_post_max << " MB"
+                         << " | step_max=" << rss_step_max << " MB"
+                         << " | peak=" << rss_peak_mb << " MB"
+                         << endl;
+                }
+
+                if ((step + 1) % 100 == 0) {
+                    MemoryManager::instance().print_memory_stats();
+                }
+
+                if (args.eval_interval > 0 && (step + 1) % args.eval_interval == 0) {
+                    auto valid_metrics = evaluate_valid_dpo();
+                    cout << "\n[Eval] epoch " << cur_epoch
+                         << " | step " << (step + 1)
+                         << " | loss " << fixed << setprecision(4) << valid_metrics.loss
+                         << " | reward_acc " << setprecision(4) << valid_metrics.reward_accuracy
+                         << " | reward_margin " << setprecision(4) << valid_metrics.reward_margin
+                         << " | ema_loss " << setprecision(4) << float(ema_loss)
+                         << " | total_tokens " << total_tokens
+                         << "\n" << endl;
+
+                    if (!args.eval_out.empty()) {
+                        stringstream ss;
+                        ss << "{\"step\":" << (step + 1)
+                           << ",\"epoch\":" << cur_epoch
+                           << ",\"loss\":" << valid_metrics.loss
+                           << ",\"reward_accuracy\":" << valid_metrics.reward_accuracy
+                           << ",\"reward_margin\":" << valid_metrics.reward_margin
+                           << ",\"chosen_reward\":" << valid_metrics.chosen_reward
+                           << ",\"rejected_reward\":" << valid_metrics.rejected_reward
+                           << ",\"ema_loss\":" << float(ema_loss)
+                           << ",\"total_tokens\":" << total_tokens
+                           << "}";
+                        append_jsonl(args.eval_out, ss.str());
+                    }
+                }
+
+                if (args.save_every > 0 && (step + 1) % args.save_every == 0 && !args.lora_out.empty()) {
+                    string ckpt_path = make_checkpoint_path(args.lora_out, step + 1);
+                    cout << "\n[Checkpoint] saving to " << ckpt_path << endl;
+                    if (has_active_lora_spec) {
+                        LoraSaver::save_safetensors(ckpt_path, model, active_lora_spec);
+                        cout << "  ✓ Checkpoint saved\n" << endl;
+                    } else {
+                        cout << "  ⚠️ No active LoRA config detected, skip saving" << endl;
+                    }
+                }
+            }
+
+            cout << "\n[6/6] Save final LoRA weights..." << endl;
+            if (!args.lora_out.empty()) {
+                if (has_active_lora_spec) {
+                    LoraSaver::save_safetensors(args.lora_out, model, active_lora_spec);
+                    cout << "  ✓ LoRA saved to: " << args.lora_out << endl;
+                } else {
+                    cout << "  ⚠️ No LoRA weights found to save, skipped" << endl;
+                }
+            }
+
+            cout << "\n========================================" << endl;
+            cout << "✅ Training complete!" << endl;
+            cout << "  Total steps: " << args.steps << endl;
+            cout << "  Total response tokens: " << total_tokens << endl;
+            cout << "  Final EMA loss: " << fixed << setprecision(4) << float(ema_loss) << endl;
+            cout << "========================================\n" << endl;
             return 0;
         }
 
@@ -671,4 +1025,3 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
-

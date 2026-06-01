@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "backward_functions.h"
 #include "tensor.h"
 #include <vector>
 
@@ -30,6 +31,22 @@ struct DPOMetrics {
 std::vector<float> sequence_logprob_masked(const TensorPtr& logits,
                                            const TensorPtr& input_ids,
                                            const TensorPtr& response_mask);
+
+/**
+ * @brief Autograd-enabled scalar DPO loss from policy/reference logits.
+ *
+ * Gradients are propagated only to policy logits. Reference logits are treated
+ * as frozen scores.
+ */
+TensorPtr dpo_loss(const TensorPtr& policy_chosen_logits,
+                   const TensorPtr& policy_rejected_logits,
+                   const TensorPtr& ref_chosen_logits,
+                   const TensorPtr& ref_rejected_logits,
+                   const TensorPtr& chosen_input_ids,
+                   const TensorPtr& rejected_input_ids,
+                   const TensorPtr& chosen_response_mask,
+                   const TensorPtr& rejected_response_mask,
+                   float beta);
 
 /**
  * @brief Compute mean DPO metrics from per-sample log-probabilities.

@@ -65,6 +65,7 @@ public:
     size_t num_batches() const;
     size_t num_kept() const { return kept_samples_; }
     size_t num_skipped() const { return skipped_samples_; }
+    size_t num_identical_after_truncation() const { return identical_after_truncation_; }
 
     PreferenceBatch get_batch(size_t batch_idx) const;
     PreferenceBatch next_batch(bool loop = true);
@@ -96,6 +97,7 @@ private:
 
     size_t kept_samples_ = 0;
     size_t skipped_samples_ = 0;
+    size_t identical_after_truncation_ = 0;
 };
 
 }  // namespace ops
