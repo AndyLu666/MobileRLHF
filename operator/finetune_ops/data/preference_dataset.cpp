@@ -193,36 +193,36 @@ PreferenceBatch PreferenceDataset::get_batch(size_t batch_idx) const {
     };
 
     batch.chosen_input_ids = std::make_shared<Tensor>(shape, kInt32, kCPU);
-    batch.chosen_attention_mask = std::make_shared<Tensor>(shape, kInt32, kCPU);
+    batch.chosen_attention_mask = std::make_shared<Tensor>(shape, kFloat32, kCPU);
     batch.chosen_response_mask = std::make_shared<Tensor>(shape, kInt32, kCPU);
 
     batch.rejected_input_ids = std::make_shared<Tensor>(shape, kInt32, kCPU);
-    batch.rejected_attention_mask = std::make_shared<Tensor>(shape, kInt32, kCPU);
+    batch.rejected_attention_mask = std::make_shared<Tensor>(shape, kFloat32, kCPU);
     batch.rejected_response_mask = std::make_shared<Tensor>(shape, kInt32, kCPU);
 
     int32_t* c_ids = batch.chosen_input_ids->data<int32_t>();
-    int32_t* c_attn = batch.chosen_attention_mask->data<int32_t>();
+    float* c_attn = batch.chosen_attention_mask->data<float>();
     int32_t* c_resp = batch.chosen_response_mask->data<int32_t>();
     int32_t* r_ids = batch.rejected_input_ids->data<int32_t>();
-    int32_t* r_attn = batch.rejected_attention_mask->data<int32_t>();
+    float* r_attn = batch.rejected_attention_mask->data<float>();
     int32_t* r_resp = batch.rejected_response_mask->data<int32_t>();
 
     std::memset(c_ids, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
-    std::memset(c_attn, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
+    std::memset(c_attn, 0, actual_batch_size * cfg_.seq_len * sizeof(float));
     std::memset(c_resp, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
     std::memset(r_ids, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
-    std::memset(r_attn, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
+    std::memset(r_attn, 0, actual_batch_size * cfg_.seq_len * sizeof(float));
     std::memset(r_resp, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
 
     for (size_t b = 0; b < actual_batch_size; ++b) {
         const auto& sample = samples_[order_[start + b]];
         for (int i = 0; i < cfg_.seq_len; ++i) {
             c_ids[b * cfg_.seq_len + i] = sample.chosen_input_ids[i];
-            c_attn[b * cfg_.seq_len + i] = sample.chosen_attention_mask[i];
+            c_attn[b * cfg_.seq_len + i] = static_cast<float>(sample.chosen_attention_mask[i]);
             c_resp[b * cfg_.seq_len + i] = sample.chosen_response_mask[i];
 
             r_ids[b * cfg_.seq_len + i] = sample.rejected_input_ids[i];
-            r_attn[b * cfg_.seq_len + i] = sample.rejected_attention_mask[i];
+            r_attn[b * cfg_.seq_len + i] = static_cast<float>(sample.rejected_attention_mask[i]);
             r_resp[b * cfg_.seq_len + i] = sample.rejected_response_mask[i];
         }
     }

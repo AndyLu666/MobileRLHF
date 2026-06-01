@@ -13,8 +13,10 @@
 #include "finetune_ops/graph/lora_injector.h"
 #include "finetune_ops/graph/lora_saver.h"
 #include "finetune_ops/data/wikitext2_dataset.h"
+#include "finetune_ops/data/preference_dataset.h"
 #include "finetune_ops/core/tokenizer_bpe.h"
 #include "finetune_ops/core/autograd_engine.h"
+#include "finetune_ops/core/dpo_loss.h"
 #include "finetune_ops/core/lm_loss.h"
 #include "finetune_ops/core/ops.h"
 #include "finetune_ops/optim/adam.h"
@@ -24,6 +26,7 @@ using namespace std;
 using namespace ops;
 
 struct CmdArgs {
+    string train_mode = "sft";
     string data_dir;
     string pretrained_dir;
     string lora_out;
@@ -33,6 +36,9 @@ struct CmdArgs {
     string jsonl_train;
     string jsonl_valid;
     string jsonl_test;
+    string preference_train;
+    string preference_valid;
+    string preference_test;
     
     int epochs = 0;
     int steps = 0;
@@ -46,6 +52,7 @@ struct CmdArgs {
     int warmup_steps = 0;
     float clip_grad_norm = 1.0f;
     float lora_dropout = 0.0f;
+    float dpo_beta = 0.1f;
     
     int log_interval = 1;
     int eval_interval = 0;
@@ -61,9 +68,13 @@ static void print_usage(const char* prog) {
          << "Options:\n"
          << "  --data_dir PATH          Data directory (WikiText-2 raw)\n"
          << "  --pretrained_dir PATH    Pretrained model directory\n"
+         << "  --train_mode MODE        sft | dpo\n"
          << "  --jsonl_train PATH       JSONL train (optional; contains ids/mask)\n"
          << "  --jsonl_valid PATH       JSONL valid (optional; contains ids/mask)\n"
          << "  --jsonl_test PATH        JSONL test  (optional; contains ids/mask)\n"
+         << "  --preference_train PATH  Preference JSONL train (prompt/chosen/rejected)\n"
+         << "  --preference_valid PATH  Preference JSONL valid (prompt/chosen/rejected)\n"
+         << "  --preference_test PATH   Preference JSONL test  (prompt/chosen/rejected)\n"
          << "  --lora_out PATH          Output path for LoRA adapter\n"
          << "  --resume_from PATH       Resume from LoRA checkpoint\n"
          << "  --eval_out PATH          Write eval metrics to JSONL\n"
@@ -74,6 +85,7 @@ static void print_usage(const char* prog) {
          << "  --seq_len N              Sequence length\n"
          << "  --rank R                 LoRA rank\n"
          << "  --alpha A                LoRA alpha\n"
+         << "  --dpo_beta F             DPO beta\n"
          << "  --lr LR                  Learning rate\n"
          << "  --weight_decay WD        Weight decay\n"
          << "  --warmup_steps N         Warmup steps\n"
@@ -102,9 +114,13 @@ static CmdArgs parse_args(int argc, char** argv) {
         };
         if (k == "--data_dir") args.data_dir = get_val("--data_dir");
         else if (k == "--pretrained_dir") args.pretrained_dir = get_val("--pretrained_dir");
+        else if (k == "--train_mode") args.train_mode = get_val("--train_mode");
         else if (k == "--jsonl_train") args.jsonl_train = get_val("--jsonl_train");
         else if (k == "--jsonl_valid") args.jsonl_valid = get_val("--jsonl_valid");
         else if (k == "--jsonl_test") args.jsonl_test = get_val("--jsonl_test");
+        else if (k == "--preference_train") args.preference_train = get_val("--preference_train");
+        else if (k == "--preference_valid") args.preference_valid = get_val("--preference_valid");
+        else if (k == "--preference_test") args.preference_test = get_val("--preference_test");
         else if (k == "--lora_out") args.lora_out = get_val("--lora_out");
         else if (k == "--resume_from") args.resume_from = get_val("--resume_from");
         else if (k == "--eval_out") args.eval_out = get_val("--eval_out");
@@ -115,6 +131,7 @@ static CmdArgs parse_args(int argc, char** argv) {
         else if (k == "--seq_len") args.seq_len = stoi(get_val("--seq_len"));
         else if (k == "--rank") args.rank = stoi(get_val("--rank"));
         else if (k == "--alpha") args.alpha = stof(get_val("--alpha"));
+        else if (k == "--dpo_beta") args.dpo_beta = stof(get_val("--dpo_beta"));
         else if (k == "--lr") args.lr = stof(get_val("--lr"));
         else if (k == "--weight_decay") args.weight_decay = stof(get_val("--weight_decay"));
         else if (k == "--warmup_steps") args.warmup_steps = stoi(get_val("--warmup_steps"));
@@ -129,6 +146,11 @@ static CmdArgs parse_args(int argc, char** argv) {
         else if (k == "--seed") args.seed = stoi(get_val("--seed"));
         else if (k == "--help" || k == "-h") { print_usage(argv[0]); exit(0); }
         else { cerr << "Unknown arg: " << k << endl; print_usage(argv[0]); exit(1); }
+    }
+    if (args.train_mode != "sft" && args.train_mode != "dpo") {
+        cerr << "Unsupported --train_mode: " << args.train_mode << endl;
+        print_usage(argv[0]);
+        exit(1);
     }
     return args;
 }
@@ -165,7 +187,13 @@ int main(int argc, char** argv) {
         cout << "  BLAS          : OFF (compiled)" << endl;
 #endif
         // Data source: prefer masked JSONL (MMLU-style samples); otherwise fall back to raw text under data_dir
-        if (!args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty()) {
+        cout << "  train_mode     : " << args.train_mode << endl;
+        if (args.train_mode == "dpo") {
+            cout << "  preference_train: " << args.preference_train << endl;
+            cout << "  preference_valid: " << args.preference_valid << endl;
+            if (!args.preference_test.empty()) cout << "  preference_test : " << args.preference_test << endl;
+            cout << "  dpo_beta       : " << args.dpo_beta << endl;
+        } else if (!args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty()) {
             cout << "  data_source    : JSONL (masked Causal LM)" << endl;
             if (!args.jsonl_train.empty()) cout << "  jsonl_train    : " << args.jsonl_train << endl;
             if (!args.jsonl_valid.empty()) cout << "  jsonl_valid    : " << args.jsonl_valid << endl;
@@ -286,6 +314,30 @@ int main(int argc, char** argv) {
         auto tok_cfg = BPEConfig::from_pretrained(args.pretrained_dir);
         GPT2BPETokenizer tokenizer(tok_cfg);
         tokenizer.load();
+
+        if (args.train_mode == "dpo") {
+            PreferenceDatasetConfig pref_cfg;
+            pref_cfg.train_path = args.preference_train;
+            pref_cfg.valid_path = args.preference_valid;
+            pref_cfg.test_path = args.preference_test;
+            pref_cfg.seq_len = args.seq_len;
+            pref_cfg.batch_size = args.batch_size;
+            pref_cfg.seed = static_cast<uint64_t>(args.seed);
+
+            PreferenceDataset train_pref_dataset(pref_cfg, &tokenizer);
+            train_pref_dataset.load(PreferenceSplit::Train);
+            train_pref_dataset.shuffle();
+            train_pref_dataset.print_stats();
+
+            PreferenceDataset valid_pref_dataset(pref_cfg, &tokenizer);
+            valid_pref_dataset.load(PreferenceSplit::Valid);
+            valid_pref_dataset.print_stats();
+
+            cout << "  ⚠️ Native DPO CLI plumbing is in place, but policy-gradient backward/reference-model "
+                    "training is not wired into the GPT-2 loop yet." << endl;
+            cout << "  ⚠️ Next step is to connect issue #13/#14 into the training loop." << endl;
+            return 0;
+        }
 
         WT2Config data_cfg;
         // Prefer JSONL when provided (masked labels applied only on answer spans)
@@ -619,5 +671,4 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
-
 

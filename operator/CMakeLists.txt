@@ -108,6 +108,7 @@ set(FINETUNE_SOURCES
     finetune_ops/core/step_arena.cpp
     finetune_ops/core/utils.cpp
     finetune_ops/core/lm_loss.cpp
+    finetune_ops/core/dpo_loss.cpp
     finetune_ops/core/memory_efficient_attention.cpp
     finetune_ops/core/performance_monitor.cpp
     
@@ -125,6 +126,7 @@ set(FINETUNE_SOURCES
     
     # Stage B: data loading and training
     finetune_ops/data/wikitext2_dataset.cpp
+    finetune_ops/data/preference_dataset.cpp
     finetune_ops/nn/lora_linear.cpp
     finetune_ops/optim/optimizer.cpp
     finetune_ops/optim/adam.cpp

@@ -37,11 +37,11 @@ struct PreferenceEncodedSample {
 
 struct PreferenceBatch {
     TensorPtr chosen_input_ids;       // [B, S] int32
-    TensorPtr chosen_attention_mask;  // [B, S] int32
+    TensorPtr chosen_attention_mask;  // [B, S] float32
     TensorPtr chosen_response_mask;   // [B, S] int32
 
     TensorPtr rejected_input_ids;       // [B, S] int32
-    TensorPtr rejected_attention_mask;  // [B, S] int32
+    TensorPtr rejected_attention_mask;  // [B, S] float32
     TensorPtr rejected_response_mask;   // [B, S] int32
 
     size_t num_samples = 0;
