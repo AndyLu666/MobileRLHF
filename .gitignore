@@ -76,6 +76,7 @@ temp/
 *.bak
 *.orig
 .agent-memory/
+.briefing/
 
 # Large test files
 *.npy
