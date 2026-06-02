@@ -33,3 +33,12 @@ add_executable(train_full
 )
 target_link_libraries(train_full PRIVATE operators)
 
+add_executable(test_dpo_native_smoke
+    ../operator/finetune_ops/optim/test_dpo_native_smoke.cpp
+)
+target_link_libraries(test_dpo_native_smoke PRIVATE operators)
+
+add_executable(inspect_pref_lengths
+    src/inspect_pref_lengths.cpp
+)
+target_link_libraries(inspect_pref_lengths PRIVATE operators)

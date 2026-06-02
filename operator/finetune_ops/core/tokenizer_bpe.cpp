@@ -233,6 +233,107 @@ static bool is_letter_cp(uint32_t cp) {
     return false;
 }
 
+static bool starts_with_ascii(const std::string& text, size_t pos, const char* needle) {
+    const size_t n = std::strlen(needle);
+    return pos + n <= text.size() && text.compare(pos, n, needle) == 0;
+}
+
+static std::vector<std::string> split_gpt2_like_words(const std::string& text) {
+    std::vector<std::string> words;
+    size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == ' ') {
+            size_t space_end = i;
+            while (space_end < text.size() && text[space_end] == ' ') {
+                ++space_end;
+            }
+            if (space_end > i + 1 && space_end < text.size()) {
+                Utf8Char next = decode_utf8(text, space_end);
+                if (!is_whitespace_cp(next.cp)) {
+                    words.push_back(text.substr(i, space_end - i - 1));
+                    i = space_end - 1;
+                    continue;
+                }
+            }
+        }
+
+        size_t token_start = i;
+        bool had_leading_space = false;
+
+        if (text[i] == ' ') {
+            had_leading_space = true;
+            ++i;
+            if (i >= text.size()) {
+                words.push_back(" ");
+                break;
+            }
+        }
+
+        if (!had_leading_space && text[i] == '\'') {
+            static const char* kContractions[] = {"'s", "'t", "'re", "'ve", "'m", "'ll", "'d"};
+            for (const char* contraction : kContractions) {
+                if (starts_with_ascii(text, i, contraction)) {
+                    words.push_back(text.substr(i, std::strlen(contraction)));
+                    i += std::strlen(contraction);
+                    goto next_token;
+                }
+            }
+        }
+
+        {
+            Utf8Char ch = decode_utf8(text, i);
+            if (is_letter_cp(ch.cp)) {
+                size_t j = i + ch.len;
+                while (j < text.size()) {
+                    Utf8Char next = decode_utf8(text, j);
+                    if (!is_letter_cp(next.cp)) break;
+                    j += next.len;
+                }
+                words.push_back(text.substr(token_start, j - token_start));
+                i = j;
+                goto next_token;
+            }
+            if (is_number_cp(ch.cp)) {
+                size_t j = i + ch.len;
+                while (j < text.size()) {
+                    Utf8Char next = decode_utf8(text, j);
+                    if (!is_number_cp(next.cp)) break;
+                    j += next.len;
+                }
+                words.push_back(text.substr(token_start, j - token_start));
+                i = j;
+                goto next_token;
+            }
+            if (!is_whitespace_cp(ch.cp)) {
+                size_t j = i + ch.len;
+                while (j < text.size()) {
+                    Utf8Char next = decode_utf8(text, j);
+                    if (is_whitespace_cp(next.cp) || is_letter_cp(next.cp) || is_number_cp(next.cp)) break;
+                    j += next.len;
+                }
+                words.push_back(text.substr(token_start, j - token_start));
+                i = j;
+                goto next_token;
+            }
+        }
+
+        {
+            size_t j = i;
+            while (j < text.size()) {
+                Utf8Char next = decode_utf8(text, j);
+                if (!is_whitespace_cp(next.cp)) break;
+                j += next.len;
+            }
+            words.push_back(text.substr(token_start, j - token_start));
+            i = j;
+        }
+
+next_token:
+        continue;
+    }
+    return words;
+}
+
 } // anonymous namespace
 
 namespace ops {
@@ -406,34 +507,7 @@ void GPT2BPETokenizer::load_special_tokens() {
 // ============================================================================
 
 std::vector<std::string> GPT2BPETokenizer::split_to_words(const std::string& text) {
-    // GPT-2 regex after byte→unicode mapping:
-    // 's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
-    //
-    // Manual implementation without \p classes:
-    // - English contractions: 's|'t|'re|'ve|'m|'ll|'d
-    // - Letters/numbers with optional leading space
-    // - Punctuation with optional leading space
-    // - Consecutive whitespace
-    std::regex pattern(
-        R"('s|'t|'re|'ve|'m|'ll|'d|)"
-        R"( ?[a-zA-Z]+|)"
-        R"( ?[0-9]+|)"
-        R"( ?[^\s\w]+|)"
-        R"(\s+(?!\S)|\s+)"
-    );
-    
-    std::vector<std::string> words;
-    auto words_begin = std::sregex_iterator(text.begin(), text.end(), pattern);
-    auto words_end = std::sregex_iterator();
-    
-    for (auto it = words_begin; it != words_end; ++it) {
-        std::string match = it->str();
-        if (!match.empty()) {
-            words.push_back(match);
-        }
-    }
-    
-    return words;
+    return split_gpt2_like_words(text);
 }
 
 std::pair<int, int> GPT2BPETokenizer::get_best_pair(const std::vector<std::string>& word) {
@@ -510,17 +584,15 @@ std::vector<int> GPT2BPETokenizer::encode(const std::string& text,
                                           int max_length,
                                           bool truncation) {
     std::vector<int> ids;
-    
-    // 1. bytes → unicode mapping
-    std::string unicode_text = bytes_to_unicode(text);
-    
-    // 2. Pre-tokenize
-    auto words = split_to_words(unicode_text);
-    
-    // 3. Apply BPE to each word
-    for (const auto& word : words) {
-        auto bpe_tokens = bpe(word);
-        
+
+    // Match HF GPT-2 flow: regex pre-tokenize raw text first, then apply
+    // byte->unicode mapping per token before BPE merges.
+    auto words = split_to_words(text);
+
+    for (const auto& word_raw : words) {
+        auto unicode_word = bytes_to_unicode(word_raw);
+        auto bpe_tokens = bpe(unicode_word);
+
         for (const auto& bpe_token : bpe_tokens) {
             auto it = vocab_.find(bpe_token);
             if (it != vocab_.end()) {
@@ -895,22 +967,7 @@ std::vector<QwenBPETokenizer::Segment> QwenBPETokenizer::split_by_added_tokens(c
 }
 
 std::vector<std::string> QwenBPETokenizer::split_to_words(const std::string& text) {
-    // Same pre-tokenization regex as GPT-2 (ASCII approximation)
-    std::regex pattern(
-        R"('s|'t|'re|'ve|'m|'ll|'d|)"
-        R"( ?[a-zA-Z]+|)"
-        R"( ?[0-9]+|)"
-        R"( ?[^\s\w]+|)"
-        R"(\s+(?!\S)|\s+)"
-    );
-    std::vector<std::string> words;
-    auto words_begin = std::sregex_iterator(text.begin(), text.end(), pattern);
-    auto words_end = std::sregex_iterator();
-    for (auto it = words_begin; it != words_end; ++it) {
-        std::string match = it->str();
-        if (!match.empty()) words.push_back(match);
-    }
-    return words;
+    return split_gpt2_like_words(text);
 }
 
 std::vector<int> QwenBPETokenizer::encode(const std::string& text,

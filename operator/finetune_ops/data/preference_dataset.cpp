@@ -13,23 +13,25 @@ namespace ops {
 
 namespace {
 
-static bool extract_json_string_field(const std::string& line,
-                                      const std::string& key,
-                                      std::string& out) {
-    const std::string needle = "\"" + key + "\"";
-    size_t key_pos = line.find(needle);
-    if (key_pos == std::string::npos) return false;
+static size_t skip_ws(const std::string& s, size_t pos) {
+    while (pos < s.size()) {
+        const char c = s[pos];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
+        ++pos;
+    }
+    return pos;
+}
 
-    size_t colon = line.find(':', key_pos + needle.size());
-    if (colon == std::string::npos) return false;
-
-    size_t quote_start = line.find('"', colon + 1);
-    if (quote_start == std::string::npos) return false;
+static bool parse_json_string_literal(const std::string& s,
+                                      size_t quote_start,
+                                      std::string& out,
+                                      size_t* next_pos) {
+    if (quote_start >= s.size() || s[quote_start] != '"') return false;
 
     std::string value;
     bool escape = false;
-    for (size_t i = quote_start + 1; i < line.size(); ++i) {
-        char c = line[i];
+    for (size_t i = quote_start + 1; i < s.size(); ++i) {
+        const char c = s[i];
         if (escape) {
             switch (c) {
                 case 'n': value.push_back('\n'); break;
@@ -37,6 +39,7 @@ static bool extract_json_string_field(const std::string& line,
                 case 't': value.push_back('\t'); break;
                 case '"': value.push_back('"'); break;
                 case '\\': value.push_back('\\'); break;
+                case '/': value.push_back('/'); break;
                 default: value.push_back(c); break;
             }
             escape = false;
@@ -47,12 +50,27 @@ static bool extract_json_string_field(const std::string& line,
             continue;
         }
         if (c == '"') {
-            out = value;
+            out = std::move(value);
+            if (next_pos) *next_pos = i + 1;
             return true;
         }
         value.push_back(c);
     }
     return false;
+}
+
+static bool extract_json_string_field(const std::string& line,
+                                      const std::string& key,
+                                      std::string& out) {
+    const std::string needle = "\"" + key + "\"";
+    size_t key_pos = line.find(needle);
+    if (key_pos == std::string::npos) return false;
+
+    size_t colon = line.find(':', key_pos + needle.size());
+    if (colon == std::string::npos) return false;
+
+    size_t value_pos = skip_ws(line, colon + 1);
+    return parse_json_string_literal(line, value_pos, out, nullptr);
 }
 
 }  // namespace

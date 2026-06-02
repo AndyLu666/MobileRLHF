@@ -2,6 +2,36 @@
 
 Date: `2026-06-01`
 
+## 2026-06-02 checkpoint
+- Native DPO smoke now has a standard build target: `gpt2_small_lora_finetune` builds `test_dpo_native_smoke`.
+- Repeatable validation path is now:
+  - `cmake --build . --target test_dpo_native_smoke train -j2`
+  - `./test_dpo_native_smoke`
+  - `./train --train_mode dpo ...`
+- Real-MMLU tokenizer retention is now aligned with PyTorch/HF at `seq_len=384`:
+  - native keeps `222/480` train and `117/120` valid
+- BLAS / Accelerate full real-MMLU native smoke is now practical:
+  - build dir: `gpt2_small_lora_finetune/build_release_blas`
+  - one-command entrypoint: `review-stage/scripts/run_native_real_mmlu_full_smoke_blas.sh`
+  - observed result:
+    - `dpo_loss=0.6931`
+    - `grad_norm=1.000000`
+    - `nonzero_grad_tensors=24`
+    - wall time about `11.78s`
+- A repeatable short real-data native smoke now exists:
+  - generator: `review-stage/scripts/build_real_mmlu_short_pref_subset.py`
+  - outputs:
+    - `review-stage/data/real_mmlu_pref_short_train.jsonl`
+    - `review-stage/data/real_mmlu_pref_short_eval.jsonl`
+  - one-command entrypoint: `review-stage/scripts/run_native_real_mmlu_short_smoke.sh`
+  - smoke config:
+    - `seq_len=128`
+    - `train=16`
+    - `eval=8`
+- Remaining work under issue `#16` is now closer to:
+  - treat the BLAS full real-MMLU 1-step smoke as the primary repeatable validation target
+  - keep the short real-data smoke as the faster fallback path
+
 ## Goal
 - Final goal: run `DPO` training through the repo's native `C++` / mobile-style training path, not only through `pytorch_alignment/`.
 
