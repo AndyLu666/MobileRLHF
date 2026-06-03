@@ -229,11 +229,10 @@ int main(int argc, char** argv) {
         // Load size dynamically from HF config.json (supports gpt2 / gpt2-medium / gpt2-large / gpt2-xl)
         GPT2Config cfg = GPT2Config::from_pretrained(args.pretrained_dir + "/config.json");
         GPT2Model model(cfg);
-        if (args.train_mode == "dpo") {
-            // Native memory-efficient attention currently has a placeholder backward
-            // that returns zero grads. Force the standard path for DPO training.
-            model.set_use_memory_efficient_attention(false);
-        }
+        // Native memory-efficient attention backward is still incomplete.
+        // Force the standard path for all LoRA finetuning modes so SFT/DPO
+        // comparisons use the same valid gradient path.
+        model.set_use_memory_efficient_attention(false);
         model.tie_weights();
         model.print_model_info();
 
