@@ -44,6 +44,7 @@ struct PreferenceBatch {
     TensorPtr rejected_attention_mask;  // [B, S] float32
     TensorPtr rejected_response_mask;   // [B, S] int32
 
+    std::vector<size_t> sample_indices; // original sample ids in this batch
     size_t num_samples = 0;
 };
 

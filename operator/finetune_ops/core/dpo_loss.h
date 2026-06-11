@@ -49,6 +49,19 @@ TensorPtr dpo_loss(const TensorPtr& policy_chosen_logits,
                    float beta);
 
 /**
+ * @brief Autograd-enabled scalar DPO loss using cached frozen-reference logps.
+ */
+TensorPtr dpo_loss_with_ref_logps(const TensorPtr& policy_chosen_logits,
+                                  const TensorPtr& policy_rejected_logits,
+                                  const std::vector<float>& ref_chosen_logps,
+                                  const std::vector<float>& ref_rejected_logps,
+                                  const TensorPtr& chosen_input_ids,
+                                  const TensorPtr& rejected_input_ids,
+                                  const TensorPtr& chosen_response_mask,
+                                  const TensorPtr& rejected_response_mask,
+                                  float beta);
+
+/**
  * @brief Compute mean DPO metrics from per-sample log-probabilities.
  */
 DPOMetrics compute_dpo_metrics_from_logps(const std::vector<float>& policy_chosen_logps,
@@ -69,5 +82,16 @@ DPOMetrics compute_dpo_metrics_from_logits(const TensorPtr& policy_chosen_logits
                                            const TensorPtr& chosen_response_mask,
                                            const TensorPtr& rejected_response_mask,
                                            float beta);
+
+DPOMetrics compute_dpo_metrics_from_policy_logits_and_ref_logps(
+    const TensorPtr& policy_chosen_logits,
+    const TensorPtr& policy_rejected_logits,
+    const std::vector<float>& ref_chosen_logps,
+    const std::vector<float>& ref_rejected_logps,
+    const TensorPtr& chosen_input_ids,
+    const TensorPtr& rejected_input_ids,
+    const TensorPtr& chosen_response_mask,
+    const TensorPtr& rejected_response_mask,
+    float beta);
 
 }  // namespace ops

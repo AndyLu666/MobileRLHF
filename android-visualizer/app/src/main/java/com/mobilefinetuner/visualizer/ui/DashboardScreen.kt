@@ -45,6 +45,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,6 +53,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -80,6 +82,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mobilefinetuner.visualizer.model.DashboardTab
 import com.mobilefinetuner.visualizer.model.EventType
+import com.mobilefinetuner.visualizer.model.FeedbackSessionState
+import com.mobilefinetuner.visualizer.model.NativeDemoConfig
+import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
+import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
 import com.mobilefinetuner.visualizer.model.RunHandle
 import com.mobilefinetuner.visualizer.model.RunSnapshot
 import com.mobilefinetuner.visualizer.model.RunStatus
@@ -201,6 +207,7 @@ fun DashboardScreen(
                     compareRunId = ui.compareRunId,
                     onPickDirectory = { picker.launch(null) },
                     onEnableDemo = viewModel::enableDemoMode,
+                    onEnableDpoTest = viewModel::enableDpoTestMode,
                     onSelectRun = viewModel::selectRun,
                     onSelectCompareRun = viewModel::selectComparisonRun
                 )
@@ -251,7 +258,13 @@ fun DashboardScreen(
                             (fadeOut() + slideOutVertically { -it / 12 })
                     }
                 ) { tab ->
-                    when (tab) {
+                    val feedbackSession = ui.feedbackSession
+                    if (feedbackSession != null && !feedbackSession.isComplete) {
+                        FeedbackCollectionPanel(
+                            session = feedbackSession,
+                            onChoose = viewModel::chooseFeedback
+                        )
+                    } else when (tab) {
                         DashboardTab.OVERVIEW -> OverviewTab(snapshot = ui.snapshot)
                         DashboardTab.TRAINING -> TrainingTab(snapshot = ui.snapshot)
                         DashboardTab.COMPARISON -> ComparisonTab(
@@ -264,8 +277,15 @@ fun DashboardScreen(
                             runs = ui.runHandles,
                             selectedRunId = ui.selectedRunId,
                             compareRunId = ui.compareRunId,
+                            config = ui.nativeDemoConfig,
+                            runner = ui.nativeDemoRunner,
+                            snapshot = ui.snapshot,
                             onSelect = viewModel::selectRun,
-                            onSelectCompare = viewModel::selectComparisonRun
+                            onSelectCompare = viewModel::selectComparisonRun,
+                            onConfigChange = viewModel::updateNativeDemoConfig,
+                            onPreset = viewModel::applyNativeDemoPreset,
+                            onStart = viewModel::startNativeDemoRun,
+                            onStop = viewModel::stopNativeDemoRun
                         )
                     }
                 }
@@ -281,6 +301,7 @@ private fun ControlBar(
     compareRunId: String?,
     onPickDirectory: () -> Unit,
     onEnableDemo: () -> Unit,
+    onEnableDpoTest: () -> Unit,
     onSelectRun: (String) -> Unit,
     onSelectCompareRun: (String?) -> Unit
 ) {
@@ -308,6 +329,9 @@ private fun ControlBar(
             }
             OutlinedButton(onClick = onEnableDemo) {
                 Text("Load Demo")
+            }
+            OutlinedButton(onClick = onEnableDpoTest) {
+                Text("Test DPO")
             }
         }
 
@@ -424,6 +448,126 @@ private fun ControlBar(
     }
 }
 
+@Composable
+private fun FeedbackCollectionPanel(
+    session: FeedbackSessionState,
+    onChoose: (String) -> Unit
+) {
+    val current = session.currentPrompt
+    if (current == null) {
+        EmptyState("Feedback collection finished.")
+        return
+    }
+
+    val total = session.prompts.size
+    val currentNumber = session.currentIndex + 1
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Human Feedback",
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "$currentNumber/$total",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    Text(
+                        text = current.prompt,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Choose the better response. Training starts after ${total - session.chosenLabels.size} choices.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        item {
+            FeedbackChoiceCard(
+                label = "A",
+                text = current.answerA,
+                accent = NeonBlue,
+                onClick = { onChoose("A") }
+            )
+        }
+        item {
+            FeedbackChoiceCard(
+                label = "B",
+                text = current.answerB,
+                accent = NeonGreen,
+                onClick = { onChoose("B") }
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeedbackChoiceCard(
+    label: String,
+    text: String,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        shape = RoundedCornerShape(14.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleMedium,
+                color = accent,
+                modifier = Modifier
+                    .background(accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 11.dp, vertical = 7.dp)
+            )
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun OverviewTab(snapshot: RunSnapshot?) {
@@ -434,6 +578,12 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
 
     val last = snapshot.metrics.lastOrNull()
     val prev = snapshot.metrics.dropLast(1).lastOrNull()
+    val evalMetrics = snapshot.metrics.filter { it.source.contains("eval", ignoreCase = true) }
+    val latestEval = evalMetrics.lastOrNull()
+    val prevEval = evalMetrics.dropLast(1).lastOrNull()
+    val displayMetric = latestEval ?: last
+    val displayPrev = if (latestEval != null) prevEval else prev
+    val displayLoss = latestEval?.loss ?: snapshot.summary.finalEmaLoss ?: last?.loss
 
     var pulse by remember(snapshot.runId) { mutableStateOf(false) }
     var seenStep by remember(snapshot.runId) { mutableIntStateOf(-1) }
@@ -449,6 +599,9 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
     }
 
     val entryState = remember { MutableTransitionState(false).apply { targetState = true } }
+    val hasRewardMetrics = snapshot.metrics.any {
+        it.rewardAccuracy != null || it.rewardMargin != null
+    }
 
     Box(modifier = Modifier.fillMaxSize().padding(top = 8.dp)) {
     LazyColumn(
@@ -495,7 +648,15 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            StatusPill(snapshot.status)
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (hasRewardMetrics) {
+                                    FeedbackModePill()
+                                }
+                                StatusPill(snapshot.status)
+                            }
                         }
 
                         Row(
@@ -507,13 +668,29 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.primary
                             )
+                            if (hasRewardMetrics) {
+                                Text(
+                                    text = "•",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "DPO reward metrics",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = RssColor
+                                )
+                            }
                             Text(
                                 text = "•",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "${snapshot.metrics.size} steps parsed",
+                                text = if (snapshot.metrics.isEmpty() && snapshot.status == RunStatus.RUNNING) {
+                                    inferLiveStage(snapshot)
+                                } else {
+                                    "${snapshot.metrics.size} steps parsed"
+                                },
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -530,6 +707,9 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
                             "Step ${last.step} / $total"
                         } else if (last != null) {
                             "Step ${last.step}"
+                        } else if (snapshot.status == RunStatus.RUNNING) {
+                            val totalText = total?.let { " / $it" } ?: ""
+                            "Waiting for first step$totalText"
                         } else {
                             "No training step parsed"
                         }
@@ -593,29 +773,62 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
             }
         }
 
+        if (snapshot.status == RunStatus.RUNNING || snapshot.metrics.size < 2) {
+            item {
+                LiveRunStatusPanel(snapshot = snapshot, title = "Live Run State")
+            }
+        }
+
         item {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 maxItemsInEachRow = 2
             ) {
+                val metricsRss = snapshot.metrics.mapNotNull { it.rssMb }
                 MetricCard(
-                    label = "Loss",
-                    value = last?.loss?.let { format3(it) } ?: "N/A",
-                    deltaText = deltaText(last?.loss, prev?.loss, lowerIsBetter = true),
+                    label = if (latestEval != null) "Eval Loss" else "Loss",
+                    value = displayLoss?.let { format3(it) } ?: "N/A",
+                    deltaText = if (latestEval != null) {
+                        deltaText(latestEval.loss, prevEval?.loss, lowerIsBetter = true)
+                    } else {
+                        deltaText(last?.loss, prev?.loss, lowerIsBetter = true)
+                    },
                     accent = LossColor,
                     modifier = Modifier.weight(1f),
                     isLiveHighlight = pulse,
-                    sparklineValues = snapshot.metrics.takeLast(30).mapNotNull { it.loss }
+                    sparklineValues = if (latestEval != null) {
+                        evalMetrics.takeLast(30).mapNotNull { it.loss }
+                    } else {
+                        snapshot.metrics.takeLast(30).mapNotNull { it.loss }
+                    }
                 )
                 MetricCard(
-                    label = "PPL",
-                    value = last?.ppl?.let { format2(it) } ?: "N/A",
-                    deltaText = deltaText(last?.ppl, prev?.ppl, lowerIsBetter = true),
+                    label = if (hasRewardMetrics && latestEval != null) {
+                        "Eval Reward Acc"
+                    } else if (hasRewardMetrics) {
+                        "Reward Acc"
+                    } else {
+                        "PPL"
+                    },
+                    value = if (hasRewardMetrics) {
+                        displayMetric?.rewardAccuracy?.let { formatPct(it) } ?: "N/A"
+                    } else {
+                        last?.ppl?.let { format2(it) } ?: "N/A"
+                    },
+                    deltaText = if (hasRewardMetrics) {
+                        deltaText(displayMetric?.rewardAccuracy, displayPrev?.rewardAccuracy, lowerIsBetter = false)
+                    } else {
+                        deltaText(last?.ppl, prev?.ppl, lowerIsBetter = true)
+                    },
                     accent = PplColor,
                     modifier = Modifier.weight(1f),
                     isLiveHighlight = pulse,
-                    sparklineValues = snapshot.metrics.takeLast(30).mapNotNull { it.ppl }
+                    sparklineValues = if (hasRewardMetrics) {
+                        (evalMetrics.takeIf { it.isNotEmpty() } ?: snapshot.metrics).takeLast(30).mapNotNull { it.rewardAccuracy }
+                    } else {
+                        snapshot.metrics.takeLast(30).mapNotNull { it.ppl }
+                    }
                 )
                 MetricCard(
                     label = "LR",
@@ -627,14 +840,36 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
                     sparklineValues = snapshot.metrics.takeLast(30).mapNotNull { it.lr }
                 )
                 MetricCard(
-                    label = "Peak RSS",
-                    value = snapshot.summary.maxTrainRssMb?.let { "${format1(it)} MB" }
-                        ?: snapshot.rssPoints.maxByOrNull { it.rssMb }?.rssMb?.let { "${format1(it)} MB" }
-                        ?: "N/A",
+                    label = if (hasRewardMetrics && latestEval != null) {
+                        "Eval Margin"
+                    } else if (hasRewardMetrics) {
+                        "Reward Margin"
+                    } else {
+                        "Peak RSS"
+                    },
+                    value = if (hasRewardMetrics) {
+                        displayMetric?.rewardMargin?.let { format3(it) } ?: "N/A"
+                    } else {
+                        snapshot.summary.maxTrainRssMb?.let { "${format1(it)} MB" }
+                            ?: snapshot.rssPoints.maxByOrNull { it.rssMb }?.rssMb?.let { "${format1(it)} MB" }
+                            ?: metricsRss.maxOrNull()?.let { "${format1(it)} MB" }
+                            ?: "N/A"
+                    },
+                    deltaText = if (hasRewardMetrics) {
+                        deltaText(displayMetric?.rewardMargin, displayPrev?.rewardMargin, lowerIsBetter = false)
+                    } else {
+                        null
+                    },
                     accent = RssColor,
                     modifier = Modifier.weight(1f),
                     isLiveHighlight = pulse,
-                    sparklineValues = snapshot.rssPoints.takeLast(30).map { it.rssMb }
+                    sparklineValues = if (hasRewardMetrics) {
+                        (evalMetrics.takeIf { it.isNotEmpty() } ?: snapshot.metrics).takeLast(30).mapNotNull { it.rewardMargin }
+                    } else {
+                        snapshot.rssPoints.takeLast(30).map { it.rssMb }.ifEmpty {
+                            snapshot.metrics.takeLast(30).mapNotNull { it.rssMb }
+                        }
+                    }
                 )
             }
         }
@@ -652,6 +887,141 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
         }
     }
     } // end Box
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LiveRunStatusPanel(
+    snapshot: RunSnapshot,
+    title: String
+) {
+    val last = snapshot.metrics.lastOrNull()
+    val stage = inferLiveStage(snapshot)
+    val recentLogs = snapshot.logTail.filter { it.isNotBlank() }.takeLast(10)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f), RoundedCornerShape(18.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.18f), RoundedCornerShape(18.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = stage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            StatusPill(snapshot.status)
+        }
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            maxItemsInEachRow = 3
+        ) {
+            MiniMetricChip(
+                label = "Step",
+                value = last?.let { "${it.step}/${it.totalSteps ?: "?"}" } ?: "loading",
+                accent = LrColor,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "Loss",
+                value = last?.loss?.let { format3(it) } ?: "pending",
+                accent = LossColor,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "RSS",
+                value = last?.rssMb?.let { "${format1(it)} MB" } ?: "pending",
+                accent = RssColor,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "Reward Acc",
+                value = last?.rewardAccuracy?.let { formatPct(it) } ?: "pending",
+                accent = PplColor,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "Margin",
+                value = last?.rewardMargin?.let { format3(it) } ?: "pending",
+                accent = NeonBlue,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "Log Lines",
+                value = snapshot.logTail.size.toString(),
+                accent = NeonAmber,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        if (recentLogs.isNotEmpty()) {
+            TerminalLogView(
+                logs = recentLogs,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 240.dp)
+            )
+        }
+    }
+}
+
+private fun inferLiveStage(snapshot: RunSnapshot): String {
+    val lines = snapshot.logTail.asReversed()
+    val stageLine = lines.firstOrNull { line ->
+        val lower = line.lowercase()
+        Regex("""\[[1-6]/6\]""").containsMatchIn(line) ||
+            "[train]" in lower ||
+            "[eval]" in lower ||
+            "[stopped]" in lower ||
+            "training complete" in lower ||
+            "exception" in lower ||
+            "error" in lower
+    }
+    return stageLine ?: when (snapshot.status) {
+        RunStatus.RUNNING -> "Native process is starting; waiting for the first log line."
+        RunStatus.STOPPED -> "Run stopped by user."
+        RunStatus.COMPLETED -> "Run completed."
+        RunStatus.FAILED -> "Run failed."
+        RunStatus.IDLE -> "No active training stage parsed yet."
+    }
+}
+
+@Composable
+private fun FeedbackModePill(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(RssColor.copy(alpha = 0.14f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .background(RssColor)
+                .padding(4.dp)
+        )
+        Text(
+            text = "HFRL",
+            style = MaterialTheme.typography.labelLarge,
+            color = RssColor
+        )
+    }
 }
 
 @Composable
@@ -776,8 +1146,13 @@ private fun TrainingTab(snapshot: RunSnapshot?) {
     val lossSeries = metrics.mapNotNull { it.loss }
     val pplSeries = metrics.mapNotNull { it.ppl }
     val lrSeries = metrics.mapNotNull { it.lr }
-    val rssSeries = snapshot.rssPoints.map { it.rssMb }
+    val rewardAccSeries = metrics.mapNotNull { it.rewardAccuracy }
+    val rewardMarginSeries = metrics.mapNotNull { it.rewardMargin }
+    val rssSeries = snapshot.rssPoints.map { it.rssMb }.ifEmpty {
+        metrics.mapNotNull { it.rssMb }
+    }
     val lossVarianceSeries = rollingLossDeltaVariance(lossSeries, window = 10)
+    val hasRewardMetrics = rewardAccSeries.isNotEmpty() || rewardMarginSeries.isNotEmpty()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -807,16 +1182,35 @@ private fun TrainingTab(snapshot: RunSnapshot?) {
                         maxItemsInEachRow = 2
                     ) {
                         MiniMetricChip(label = "Loss", value = last?.loss?.let { format3(it) } ?: "N/A", accent = LossColor, modifier = Modifier.weight(1f))
-                        MiniMetricChip(label = "PPL",  value = last?.ppl?.let { format2(it) } ?: "N/A",  accent = PplColor,  modifier = Modifier.weight(1f))
+                        MiniMetricChip(
+                            label = if (hasRewardMetrics) "Reward Acc" else "PPL",
+                            value = if (hasRewardMetrics) {
+                                last?.rewardAccuracy?.let { formatPct(it) } ?: "N/A"
+                            } else {
+                                last?.ppl?.let { format2(it) } ?: "N/A"
+                            },
+                            accent = PplColor,
+                            modifier = Modifier.weight(1f)
+                        )
                         MiniMetricChip(label = "LR",   value = last?.lr?.let { format6(it) } ?: "N/A",   accent = LrColor,   modifier = Modifier.weight(1f))
                         MiniMetricChip(
-                            label    = "RSS",
-                            value    = rssSeries.lastOrNull()?.let { "${format1(it)} MB" } ?: "N/A",
+                            label    = if (hasRewardMetrics) "Margin" else "RSS",
+                            value    = if (hasRewardMetrics) {
+                                last?.rewardMargin?.let { format3(it) } ?: "N/A"
+                            } else {
+                                rssSeries.lastOrNull()?.let { "${format1(it)} MB" } ?: "N/A"
+                            },
                             accent   = RssColor,
                             modifier = Modifier.weight(1f)
                         )
                     }
                 }
+            }
+        }
+
+        if (snapshot.status == RunStatus.RUNNING || metrics.size < 2) {
+            item {
+                LiveRunStatusPanel(snapshot = snapshot, title = "Current Native Run")
             }
         }
 
@@ -838,6 +1232,26 @@ private fun TrainingTab(snapshot: RunSnapshot?) {
                 seriesLabel    = "Variance",
                 valueFormatter = { format4(it) }
             )
+        }
+        if (hasRewardMetrics) {
+            item {
+                InteractiveMetricLineChart(
+                    title          = "Reward Accuracy",
+                    subtitle       = "Preference win rate from simulated human feedback",
+                    values         = rewardAccSeries,
+                    color          = PplColor,
+                    valueFormatter = { formatPct(it) }
+                )
+            }
+            item {
+                InteractiveMetricLineChart(
+                    title          = "Reward Margin",
+                    subtitle       = "Chosen reward minus rejected reward",
+                    values         = rewardMarginSeries,
+                    color          = RssColor,
+                    valueFormatter = { format3(it) }
+                )
+            }
         }
         item {
             InteractiveMetricLineChart(
@@ -876,8 +1290,29 @@ private fun ComparisonTab(
     compare: RunSnapshot?,
     compareName: String?
 ) {
-    if (primary == null || compare == null) {
+    if (primary == null) {
         EmptyState("Select both Primary and Compare runs to see side-by-side analytics.")
+        return
+    }
+
+    if (compare == null) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                LiveRunStatusPanel(snapshot = primary, title = "Primary Run")
+            }
+            item {
+                Text(
+                    text = "Set a Compare run in Runs when you want side-by-side charts.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+        }
         return
     }
 
@@ -1058,19 +1493,44 @@ private fun ExperimentsTab(
     runs: List<RunHandle>,
     selectedRunId: String?,
     compareRunId: String?,
+    config: NativeDemoConfig,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?,
     onSelect: (String) -> Unit,
-    onSelectCompare: (String?) -> Unit
+    onSelectCompare: (String?) -> Unit,
+    onConfigChange: (NativeDemoConfig) -> Unit,
+    onPreset: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
 ) {
-    if (runs.isEmpty()) {
-        EmptyState("No run discovered. Select your runs directory first.")
-        return
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        item {
+            NativeDemoRunnerCard(
+                config = config,
+                runner = runner,
+                snapshot = snapshot,
+                onConfigChange = onConfigChange,
+                onPreset = onPreset,
+                onStart = onStart,
+                onStop = onStop
+            )
+        }
+
+        if (runs.isEmpty()) {
+            item {
+                Text(
+                    text = "No run folder loaded yet. Launch a demo or select an existing run directory.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                )
+            }
+        }
+
         items(runs) { run ->
             val selected = run.id == selectedRunId
             val compared = run.id == compareRunId
@@ -1213,6 +1673,244 @@ private fun ExperimentsTab(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun NativeDemoRunnerCard(
+    config: NativeDemoConfig,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?,
+    onConfigChange: (NativeDemoConfig) -> Unit,
+    onPreset: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    val running = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
+    val last = snapshot?.metrics?.lastOrNull()
+    var commandExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFAFBFF)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Native Demo Runner", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = runner.message ?: "Configure and launch on-device DPO training.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    text = runner.status.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = nativeRunnerColor(runner.status),
+                    modifier = Modifier
+                        .background(nativeRunnerColor(runner.status).copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                )
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf("Smoke", "Phone 80", "Long 220").forEach { preset ->
+                    OutlinedButton(
+                        onClick = { onPreset(preset) },
+                        enabled = !running
+                    ) {
+                        Text(preset)
+                    }
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 2
+            ) {
+                IntField("Steps", config.steps, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(steps = it, presetName = "Custom"))
+                }
+                IntField("Seq Len", config.seqLen, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(seqLen = it, presetName = "Custom"))
+                }
+                IntField("Rank", config.rank, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(rank = it, presetName = "Custom"))
+                }
+                IntField("Alpha", config.alpha, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(alpha = it, presetName = "Custom"))
+                }
+                DecimalField("LR", config.learningRate, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(learningRate = it, presetName = "Custom"))
+                }
+                IntField("Eval Every", config.evalInterval, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(evalInterval = it, presetName = "Custom"))
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ToggleRow(
+                    label = "Pair forward",
+                    checked = config.dpoPairForward,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onConfigChange(config.copy(dpoPairForward = it, presetName = "Custom"))
+                }
+                ToggleRow(
+                    label = "Cache ref",
+                    checked = config.cacheRefLogps,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onConfigChange(config.copy(cacheRefLogps = it, presetName = "Custom"))
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                MiniMetricChip(
+                    label = "Preset",
+                    value = config.presetName,
+                    accent = NeonBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Step",
+                    value = last?.let { "${it.step}/${it.totalSteps ?: config.steps}" } ?: "N/A",
+                    accent = LrColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Loss",
+                    value = last?.loss?.let { format3(it) } ?: "N/A",
+                    accent = LossColor,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = onStart,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Run Demo")
+                }
+                OutlinedButton(
+                    onClick = onStop,
+                    enabled = running,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Stop")
+                }
+            }
+
+            TextButton(onClick = { commandExpanded = !commandExpanded }) {
+                Text(if (commandExpanded) "Hide Command" else "Show Command")
+            }
+            if (commandExpanded) {
+                TerminalLogView(
+                    logs = listOf(runner.commandPreview ?: "Command preview unavailable."),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 220.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun IntField(
+    label: String,
+    value: Int,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onValue: (Int) -> Unit
+) {
+    OutlinedTextField(
+        value = value.toString(),
+        onValueChange = { raw -> raw.toIntOrNull()?.let(onValue) },
+        enabled = enabled,
+        label = { Text(label) },
+        singleLine = true,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun DecimalField(
+    label: String,
+    value: Double,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onValue: (Double) -> Unit
+) {
+    OutlinedTextField(
+        value = value.toString(),
+        onValueChange = { raw -> raw.toDoubleOrNull()?.let(onValue) },
+        enabled = enabled,
+        label = { Text(label) },
+        singleLine = true,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onChecked: (Boolean) -> Unit
+) {
+    Row(
+        modifier = modifier
+            .heightIn(min = 56.dp)
+            .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(12.dp))
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Checkbox(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onChecked
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 @Composable
 private fun EmptyState(message: String) {
     Box(
@@ -1240,6 +1938,17 @@ private fun eventTypeColor(type: EventType): Color {
     }
 }
 
+private fun nativeRunnerColor(status: NativeDemoRunStatus): Color {
+    return when (status) {
+        NativeDemoRunStatus.READY -> Color(0xFF8E8E93)
+        NativeDemoRunStatus.RUNNING -> Color(0xFF34C759)
+        NativeDemoRunStatus.STOPPING -> Color(0xFFFF9500)
+        NativeDemoRunStatus.STOPPED -> Color(0xFFFF9500)
+        NativeDemoRunStatus.COMPLETED -> Color(0xFF007AFF)
+        NativeDemoRunStatus.FAILED -> Color(0xFFFF3B30)
+    }
+}
+
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
         DashboardTab.OVERVIEW -> "Home"
@@ -1261,6 +1970,7 @@ private fun format2(v: Double): String = String.format(Locale.US, "%.2f", v)
 private fun format3(v: Double): String = String.format(Locale.US, "%.3f", v)
 private fun format4(v: Double): String = String.format(Locale.US, "%.4f", v)
 private fun format6(v: Double): String = String.format(Locale.US, "%.6f", v)
+private fun formatPct(v: Double): String = String.format(Locale.US, "%.1f%%", v * 100.0)
 
 private fun deltaText(current: Double?, previous: Double?, lowerIsBetter: Boolean): String? {
     if (current == null || previous == null) return null

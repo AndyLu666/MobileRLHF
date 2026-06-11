@@ -5,6 +5,7 @@ import android.net.Uri
 enum class RunStatus {
     IDLE,
     RUNNING,
+    STOPPED,
     COMPLETED,
     FAILED
 }
@@ -35,6 +36,12 @@ data class StepMetric(
     val ppl: Double? = null,
     val lr: Double? = null,
     val tokens: Int? = null,
+    val rewardAccuracy: Double? = null,
+    val rewardMargin: Double? = null,
+    val chosenReward: Double? = null,
+    val rejectedReward: Double? = null,
+    val gradNorm: Double? = null,
+    val rssMb: Double? = null,
     val source: String = "log"
 )
 
@@ -82,6 +89,57 @@ data class RunHandle(
     val lastModifiedMs: Long
 )
 
+data class FeedbackPrompt(
+    val prompt: String,
+    val answerA: String,
+    val answerB: String
+)
+
+data class FeedbackSessionState(
+    val prompts: List<FeedbackPrompt>,
+    val currentIndex: Int = 0,
+    val chosenLabels: List<String> = emptyList(),
+    val sessionId: String = "hfrl_${System.currentTimeMillis()}",
+    val feedbackJsonlPath: String? = null
+) {
+    val isComplete: Boolean
+        get() = currentIndex >= prompts.size
+
+    val currentPrompt: FeedbackPrompt?
+        get() = prompts.getOrNull(currentIndex)
+}
+
+enum class NativeDemoRunStatus {
+    READY,
+    RUNNING,
+    STOPPING,
+    STOPPED,
+    COMPLETED,
+    FAILED
+}
+
+data class NativeDemoConfig(
+    val presetName: String = "Smoke",
+    val steps: Int = 8,
+    val seqLen: Int = 128,
+    val rank: Int = 1,
+    val alpha: Int = 2,
+    val learningRate: Double = 0.001,
+    val evalInterval: Int = 4,
+    val evalBatches: Int = 1,
+    val cacheRefLogps: Boolean = false,
+    val dpoPairForward: Boolean = false
+)
+
+data class NativeDemoRunnerState(
+    val status: NativeDemoRunStatus = NativeDemoRunStatus.READY,
+    val currentRunName: String? = null,
+    val currentRunPath: String? = null,
+    val commandPreview: String? = null,
+    val lastExitCode: Int? = null,
+    val message: String? = null
+)
+
 data class DashboardUiState(
     val selectedRootUri: Uri? = null,
     val activeTab: DashboardTab = DashboardTab.OVERVIEW,
@@ -90,6 +148,9 @@ data class DashboardUiState(
     val compareRunId: String? = null,
     val snapshot: RunSnapshot? = null,
     val compareSnapshot: RunSnapshot? = null,
+    val feedbackSession: FeedbackSessionState? = null,
+    val nativeDemoConfig: NativeDemoConfig = NativeDemoConfig(),
+    val nativeDemoRunner: NativeDemoRunnerState = NativeDemoRunnerState(),
     val isLoading: Boolean = false,
     val error: String? = null
 )

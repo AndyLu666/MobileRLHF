@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
+#include <chrono>
 
 #include "finetune_ops/graph/gpt2_model.h"
 #include "finetune_ops/graph/safetensors_loader.h"
@@ -32,6 +34,7 @@ struct CmdArgs {
     string lora_out;
     string resume_from;
     string eval_out;
+    string metrics_out;
     // Optional: masked JSONL inputs for supervised LM (ids/mask)
     string jsonl_train;
     string jsonl_valid;
@@ -53,6 +56,8 @@ struct CmdArgs {
     float clip_grad_norm = 1.0f;
     float lora_dropout = 0.0f;
     float dpo_beta = 0.1f;
+    bool dpo_pair_forward = true;
+    bool cache_ref_logps = false;
     
     int log_interval = 1;
     int eval_interval = 0;
@@ -78,6 +83,7 @@ static void print_usage(const char* prog) {
          << "  --lora_out PATH          Output path for LoRA adapter\n"
          << "  --resume_from PATH       Resume from LoRA checkpoint\n"
          << "  --eval_out PATH          Write eval metrics to JSONL\n"
+         << "  --metrics_out PATH       Write per-step Android metrics NDJSON\n"
          << "  --epochs N               Num epochs (overrides steps if >0)\n"
          << "  --steps N                Num training steps\n"
          << "  --batch_size N           Micro-batch size\n"
@@ -86,6 +92,8 @@ static void print_usage(const char* prog) {
          << "  --rank R                 LoRA rank\n"
          << "  --alpha A                LoRA alpha\n"
          << "  --dpo_beta F             DPO beta\n"
+         << "  --dpo_pair_forward 0|1   Batch chosen/rejected into paired DPO forwards\n"
+         << "  --cache_ref_logps 0|1    Precompute frozen-reference logps for DPO\n"
          << "  --lr LR                  Learning rate\n"
          << "  --weight_decay WD        Weight decay\n"
          << "  --warmup_steps N         Warmup steps\n"
@@ -124,6 +132,7 @@ static CmdArgs parse_args(int argc, char** argv) {
         else if (k == "--lora_out") args.lora_out = get_val("--lora_out");
         else if (k == "--resume_from") args.resume_from = get_val("--resume_from");
         else if (k == "--eval_out") args.eval_out = get_val("--eval_out");
+        else if (k == "--metrics_out") args.metrics_out = get_val("--metrics_out");
         else if (k == "--epochs") args.epochs = stoi(get_val("--epochs"));
         else if (k == "--steps") args.steps = stoi(get_val("--steps"));
         else if (k == "--batch_size") args.batch_size = stoi(get_val("--batch_size"));
@@ -132,6 +141,8 @@ static CmdArgs parse_args(int argc, char** argv) {
         else if (k == "--rank") args.rank = stoi(get_val("--rank"));
         else if (k == "--alpha") args.alpha = stof(get_val("--alpha"));
         else if (k == "--dpo_beta") args.dpo_beta = stof(get_val("--dpo_beta"));
+        else if (k == "--dpo_pair_forward") args.dpo_pair_forward = (stoi(get_val("--dpo_pair_forward")) != 0);
+        else if (k == "--cache_ref_logps") args.cache_ref_logps = (stoi(get_val("--cache_ref_logps")) != 0);
         else if (k == "--lr") args.lr = stof(get_val("--lr"));
         else if (k == "--weight_decay") args.weight_decay = stof(get_val("--weight_decay"));
         else if (k == "--warmup_steps") args.warmup_steps = stoi(get_val("--warmup_steps"));
@@ -161,6 +172,63 @@ static void append_jsonl(const string& path, const string& json_str) {
         ofs << json_str << "\n";
     }
 }
+
+static void truncate_file_if_requested(const string& path) {
+    if (path.empty()) return;
+    ofstream ofs(path, ios::trunc);
+}
+
+static size_t dtype_num_bytes(DType dtype) {
+    const size_t bytes = DTypeUtils::size_of(dtype);
+    if (bytes == 0) {
+        throw runtime_error("Unsupported dtype in dtype_num_bytes");
+    }
+    return bytes;
+}
+
+static TensorPtr concat_batch_dim0(const TensorPtr& first, const TensorPtr& second) {
+    if (!first || !second) {
+        throw runtime_error("concat_batch_dim0: null tensor");
+    }
+    if (first->dtype() != second->dtype() || first->device() != second->device()) {
+        throw runtime_error("concat_batch_dim0: dtype/device mismatch");
+    }
+    if (first->ndim() != second->ndim() || first->ndim() < 1) {
+        throw runtime_error("concat_batch_dim0: ndim mismatch");
+    }
+
+    auto out_shape = first->shape();
+    if (out_shape[0] != second->shape()[0]) {
+        // Different batch sizes are not needed for current DPO batches and make
+        // split bookkeeping error-prone.
+        throw runtime_error("concat_batch_dim0: batch-size mismatch");
+    }
+    for (int64_t d = 1; d < first->ndim(); ++d) {
+        if (first->shape()[static_cast<size_t>(d)] != second->shape()[static_cast<size_t>(d)]) {
+            throw runtime_error("concat_batch_dim0: shape mismatch");
+        }
+    }
+    out_shape[0] = first->shape()[0] + second->shape()[0];
+
+    auto out = std::make_shared<Tensor>(out_shape, first->dtype(), first->device());
+    const size_t bytes = static_cast<size_t>(first->numel()) * dtype_num_bytes(first->dtype());
+    std::memcpy(out->data_ptr(), first->data_ptr(), bytes);
+    std::memcpy(static_cast<uint8_t*>(out->data_ptr()) + bytes, second->data_ptr(), bytes);
+    return out;
+}
+
+struct DPOForwardPack {
+    TensorPtr policy_chosen_logits;
+    TensorPtr policy_rejected_logits;
+    TensorPtr ref_chosen_logits;
+    TensorPtr ref_rejected_logits;
+};
+
+struct RefLogpCache {
+    std::vector<float> chosen;
+    std::vector<float> rejected;
+    bool enabled = false;
+};
 
 static string make_checkpoint_path(const string& base, int step) {
     size_t dot_pos = base.find_last_of('.');
@@ -193,6 +261,8 @@ int main(int argc, char** argv) {
             cout << "  preference_valid: " << args.preference_valid << endl;
             if (!args.preference_test.empty()) cout << "  preference_test : " << args.preference_test << endl;
             cout << "  dpo_beta       : " << args.dpo_beta << endl;
+            cout << "  dpo_pair_forward: " << (args.dpo_pair_forward ? "ON" : "OFF") << endl;
+            cout << "  cache_ref_logps: " << (args.cache_ref_logps ? "ON" : "OFF") << endl;
         } else if (!args.jsonl_train.empty() || !args.jsonl_valid.empty() || !args.jsonl_test.empty()) {
             cout << "  data_source    : JSONL (masked Causal LM)" << endl;
             if (!args.jsonl_train.empty()) cout << "  jsonl_train    : " << args.jsonl_train << endl;
@@ -208,6 +278,10 @@ int main(int argc, char** argv) {
         }
         if (!args.eval_out.empty()) {
             cout << "  eval_out       : " << args.eval_out << endl;
+        }
+        if (!args.metrics_out.empty()) {
+            cout << "  metrics_out    : " << args.metrics_out << endl;
+            truncate_file_if_requested(args.metrics_out);
         }
         cout << "  epochs         : " << args.epochs << endl;
         cout << "  batch_size     : " << args.batch_size << endl;
@@ -444,6 +518,163 @@ int main(int argc, char** argv) {
                 return count;
             };
 
+            auto run_four_dpo_forward = [&](const PreferenceBatch& batch) -> DPOForwardPack {
+                DPOForwardPack pack;
+                pack.policy_chosen_logits = model.forward(
+                    batch.chosen_input_ids, batch.chosen_attention_mask);
+                pack.policy_rejected_logits = model.forward(
+                    batch.rejected_input_ids, batch.rejected_attention_mask);
+                pack.ref_chosen_logits = ref_model.forward(
+                    batch.chosen_input_ids, batch.chosen_attention_mask);
+                pack.ref_rejected_logits = ref_model.forward(
+                    batch.rejected_input_ids, batch.rejected_attention_mask);
+                return pack;
+            };
+
+            auto run_batched_dpo_forward = [&](const PreferenceBatch& batch) -> DPOForwardPack {
+                const int64_t batch_n = static_cast<int64_t>(batch.num_samples);
+                if (batch_n <= 0) {
+                    throw runtime_error("run_batched_dpo_forward: empty batch");
+                }
+
+                auto pair_input_ids = concat_batch_dim0(
+                    batch.chosen_input_ids, batch.rejected_input_ids);
+                auto pair_attention_mask = concat_batch_dim0(
+                    batch.chosen_attention_mask, batch.rejected_attention_mask);
+
+                auto policy_pair_logits = model.forward(pair_input_ids, pair_attention_mask);
+                auto ref_pair_logits = ref_model.forward(pair_input_ids, pair_attention_mask);
+
+                DPOForwardPack pack;
+                pack.policy_chosen_logits = policy_pair_logits->slice(0, 0, batch_n);
+                pack.policy_rejected_logits = policy_pair_logits->slice(0, batch_n, 2 * batch_n);
+                pack.ref_chosen_logits = ref_pair_logits->slice(0, 0, batch_n);
+                pack.ref_rejected_logits = ref_pair_logits->slice(0, batch_n, 2 * batch_n);
+                return pack;
+            };
+
+            auto run_policy_forward_for_cached_ref = [&](const PreferenceBatch& batch) -> DPOForwardPack {
+                const int64_t batch_n = static_cast<int64_t>(batch.num_samples);
+                if (batch_n <= 0) {
+                    throw runtime_error("run_policy_forward_for_cached_ref: empty batch");
+                }
+
+                DPOForwardPack pack;
+                if (args.dpo_pair_forward) {
+                    auto pair_input_ids = concat_batch_dim0(
+                        batch.chosen_input_ids, batch.rejected_input_ids);
+                    auto pair_attention_mask = concat_batch_dim0(
+                        batch.chosen_attention_mask, batch.rejected_attention_mask);
+                    auto policy_pair_logits = model.forward(pair_input_ids, pair_attention_mask);
+                    pack.policy_chosen_logits = policy_pair_logits->slice(0, 0, batch_n);
+                    pack.policy_rejected_logits = policy_pair_logits->slice(0, batch_n, 2 * batch_n);
+                } else {
+                    pack.policy_chosen_logits = model.forward(
+                        batch.chosen_input_ids, batch.chosen_attention_mask);
+                    pack.policy_rejected_logits = model.forward(
+                        batch.rejected_input_ids, batch.rejected_attention_mask);
+                }
+                return pack;
+            };
+
+            auto run_dpo_forward = [&](const PreferenceBatch& batch) -> DPOForwardPack {
+                if (args.dpo_pair_forward) {
+                    return run_batched_dpo_forward(batch);
+                }
+                return run_four_dpo_forward(batch);
+            };
+
+            auto build_ref_logp_cache = [&](PreferenceDataset& dataset, const string& name) -> RefLogpCache {
+                struct NoGradGuard {
+                    NoGradGuard() { ops::autograd::Engine::instance().set_enabled(false); }
+                    ~NoGradGuard() {
+                        ops::autograd::Engine::instance().clear_graph();
+                        ops::autograd::Engine::instance().set_enabled(true);
+                    }
+                } _nograd_guard;
+
+                RefLogpCache cache;
+                cache.enabled = true;
+                cache.chosen.assign(dataset.num_samples(), 0.0f);
+                cache.rejected.assign(dataset.num_samples(), 0.0f);
+
+                dataset.reset_cursor();
+                size_t cached = 0;
+                while (true) {
+                    auto batch = dataset.next_batch(false);
+                    if (!batch.chosen_input_ids) break;
+
+                    DPOForwardPack fwd;
+                    if (args.dpo_pair_forward) {
+                        const int64_t batch_n = static_cast<int64_t>(batch.num_samples);
+                        auto pair_input_ids = concat_batch_dim0(
+                            batch.chosen_input_ids, batch.rejected_input_ids);
+                        auto pair_attention_mask = concat_batch_dim0(
+                            batch.chosen_attention_mask, batch.rejected_attention_mask);
+                        auto ref_pair_logits = ref_model.forward(pair_input_ids, pair_attention_mask);
+                        fwd.ref_chosen_logits = ref_pair_logits->slice(0, 0, batch_n);
+                        fwd.ref_rejected_logits = ref_pair_logits->slice(0, batch_n, 2 * batch_n);
+                    } else {
+                        fwd.ref_chosen_logits = ref_model.forward(
+                            batch.chosen_input_ids, batch.chosen_attention_mask);
+                        fwd.ref_rejected_logits = ref_model.forward(
+                            batch.rejected_input_ids, batch.rejected_attention_mask);
+                    }
+
+                    auto chosen_logps = sequence_logprob_masked(
+                        fwd.ref_chosen_logits, batch.chosen_input_ids, batch.chosen_response_mask);
+                    auto rejected_logps = sequence_logprob_masked(
+                        fwd.ref_rejected_logits, batch.rejected_input_ids, batch.rejected_response_mask);
+
+                    if (chosen_logps.size() != batch.sample_indices.size() ||
+                        rejected_logps.size() != batch.sample_indices.size()) {
+                        throw runtime_error("build_ref_logp_cache: logp/index size mismatch");
+                    }
+                    for (size_t i = 0; i < batch.sample_indices.size(); ++i) {
+                        const size_t sample_idx = batch.sample_indices[i];
+                        cache.chosen[sample_idx] = chosen_logps[i];
+                        cache.rejected[sample_idx] = rejected_logps[i];
+                        cached++;
+                    }
+                }
+                dataset.reset_cursor();
+                cout << "  ✓ Cached " << cached << " reference logp pairs for " << name << endl;
+                return cache;
+            };
+
+            auto gather_cached_ref_logps = [](const PreferenceBatch& batch,
+                                              const RefLogpCache& cache,
+                                              std::vector<float>& chosen,
+                                              std::vector<float>& rejected) {
+                if (!cache.enabled) {
+                    throw runtime_error("gather_cached_ref_logps: cache disabled");
+                }
+                chosen.clear();
+                rejected.clear();
+                chosen.reserve(batch.sample_indices.size());
+                rejected.reserve(batch.sample_indices.size());
+                for (size_t sample_idx : batch.sample_indices) {
+                    if (sample_idx >= cache.chosen.size() || sample_idx >= cache.rejected.size()) {
+                        throw runtime_error("gather_cached_ref_logps: sample index out of range");
+                    }
+                    chosen.push_back(cache.chosen[sample_idx]);
+                    rejected.push_back(cache.rejected[sample_idx]);
+                }
+            };
+
+            RefLogpCache train_ref_cache;
+            RefLogpCache valid_ref_cache;
+            if (args.cache_ref_logps) {
+                cout << "\n[RefCache] Precompute frozen reference logps..." << endl;
+                auto cache_t0 = std::chrono::steady_clock::now();
+                train_ref_cache = build_ref_logp_cache(train_pref_dataset, "train");
+                valid_ref_cache = build_ref_logp_cache(valid_pref_dataset, "valid");
+                auto cache_t1 = std::chrono::steady_clock::now();
+                double cache_seconds = std::chrono::duration<double>(cache_t1 - cache_t0).count();
+                cout << "[Timing] ref_cache_seconds " << fixed << setprecision(4)
+                     << cache_seconds << endl;
+            }
+
             auto evaluate_valid_dpo = [&]() -> DPOMetrics {
                 struct NoGradGuard {
                     NoGradGuard() { ops::autograd::Engine::instance().set_enabled(false); }
@@ -466,25 +697,36 @@ int main(int argc, char** argv) {
                     auto batch = valid_pref_dataset.next_batch(false);
                     if (!batch.chosen_input_ids) break;
 
-                    auto policy_chosen_logits = model.forward(
-                        batch.chosen_input_ids, batch.chosen_attention_mask);
-                    auto policy_rejected_logits = model.forward(
-                        batch.rejected_input_ids, batch.rejected_attention_mask);
-                    auto ref_chosen_logits = ref_model.forward(
-                        batch.chosen_input_ids, batch.chosen_attention_mask);
-                    auto ref_rejected_logits = ref_model.forward(
-                        batch.rejected_input_ids, batch.rejected_attention_mask);
-
-                    auto metrics = compute_dpo_metrics_from_logits(
-                        policy_chosen_logits,
-                        policy_rejected_logits,
-                        ref_chosen_logits,
-                        ref_rejected_logits,
-                        batch.chosen_input_ids,
-                        batch.rejected_input_ids,
-                        batch.chosen_response_mask,
-                        batch.rejected_response_mask,
-                        args.dpo_beta);
+                    DPOMetrics metrics;
+                    if (args.cache_ref_logps) {
+                        auto fwd = run_policy_forward_for_cached_ref(batch);
+                        std::vector<float> ref_chosen_logps;
+                        std::vector<float> ref_rejected_logps;
+                        gather_cached_ref_logps(
+                            batch, valid_ref_cache, ref_chosen_logps, ref_rejected_logps);
+                        metrics = compute_dpo_metrics_from_policy_logits_and_ref_logps(
+                            fwd.policy_chosen_logits,
+                            fwd.policy_rejected_logits,
+                            ref_chosen_logps,
+                            ref_rejected_logps,
+                            batch.chosen_input_ids,
+                            batch.rejected_input_ids,
+                            batch.chosen_response_mask,
+                            batch.rejected_response_mask,
+                            args.dpo_beta);
+                    } else {
+                        auto fwd = run_dpo_forward(batch);
+                        metrics = compute_dpo_metrics_from_logits(
+                            fwd.policy_chosen_logits,
+                            fwd.policy_rejected_logits,
+                            fwd.ref_chosen_logits,
+                            fwd.ref_rejected_logits,
+                            batch.chosen_input_ids,
+                            batch.rejected_input_ids,
+                            batch.chosen_response_mask,
+                            batch.rejected_response_mask,
+                            args.dpo_beta);
+                    }
 
                     const int64_t batch_samples = static_cast<int64_t>(batch.num_samples);
                     loss_sum += static_cast<double>(metrics.loss) * static_cast<double>(batch_samples);
@@ -519,6 +761,8 @@ int main(int argc, char** argv) {
             bool ema_initialized = false;
             int64_t total_tokens = 0;
             double rss_peak_mb = 0.0;
+            DPOMetrics last_train_metrics;
+            auto train_t0 = std::chrono::steady_clock::now();
 
             for (int step = start_step; step < args.steps; ++step) {
                 const int cur_epoch = step / steps_per_epoch + 1;
@@ -535,29 +779,64 @@ int main(int argc, char** argv) {
 
                 for (int acc = 0; acc < accum; ++acc) {
                     auto batch = train_pref_dataset.next_batch();
-                    auto policy_chosen_logits = model.forward(
-                        batch.chosen_input_ids, batch.chosen_attention_mask);
-                    auto policy_rejected_logits = model.forward(
-                        batch.rejected_input_ids, batch.rejected_attention_mask);
-                    auto ref_chosen_logits = ref_model.forward(
-                        batch.chosen_input_ids, batch.chosen_attention_mask);
-                    auto ref_rejected_logits = ref_model.forward(
-                        batch.rejected_input_ids, batch.rejected_attention_mask);
+                    auto fwd = args.cache_ref_logps
+                        ? run_policy_forward_for_cached_ref(batch)
+                        : run_dpo_forward(batch);
                     rss_fwd_max = std::max(rss_fwd_max, rss_to_mb());
 
-                    auto loss = dpo_loss(
-                        policy_chosen_logits,
-                        policy_rejected_logits,
-                        ref_chosen_logits,
-                        ref_rejected_logits,
-                        batch.chosen_input_ids,
-                        batch.rejected_input_ids,
-                        batch.chosen_response_mask,
-                        batch.rejected_response_mask,
-                        args.dpo_beta);
+                    TensorPtr loss;
+                    DPOMetrics train_metrics;
+                    if (args.cache_ref_logps) {
+                        std::vector<float> ref_chosen_logps;
+                        std::vector<float> ref_rejected_logps;
+                        gather_cached_ref_logps(
+                            batch, train_ref_cache, ref_chosen_logps, ref_rejected_logps);
+                        loss = dpo_loss_with_ref_logps(
+                            fwd.policy_chosen_logits,
+                            fwd.policy_rejected_logits,
+                            ref_chosen_logps,
+                            ref_rejected_logps,
+                            batch.chosen_input_ids,
+                            batch.rejected_input_ids,
+                            batch.chosen_response_mask,
+                            batch.rejected_response_mask,
+                            args.dpo_beta);
+                        train_metrics = compute_dpo_metrics_from_policy_logits_and_ref_logps(
+                            fwd.policy_chosen_logits,
+                            fwd.policy_rejected_logits,
+                            ref_chosen_logps,
+                            ref_rejected_logps,
+                            batch.chosen_input_ids,
+                            batch.rejected_input_ids,
+                            batch.chosen_response_mask,
+                            batch.rejected_response_mask,
+                            args.dpo_beta);
+                    } else {
+                        loss = dpo_loss(
+                            fwd.policy_chosen_logits,
+                            fwd.policy_rejected_logits,
+                            fwd.ref_chosen_logits,
+                            fwd.ref_rejected_logits,
+                            batch.chosen_input_ids,
+                            batch.rejected_input_ids,
+                            batch.chosen_response_mask,
+                            batch.rejected_response_mask,
+                            args.dpo_beta);
+                        train_metrics = compute_dpo_metrics_from_logits(
+                            fwd.policy_chosen_logits,
+                            fwd.policy_rejected_logits,
+                            fwd.ref_chosen_logits,
+                            fwd.ref_rejected_logits,
+                            batch.chosen_input_ids,
+                            batch.rejected_input_ids,
+                            batch.chosen_response_mask,
+                            batch.rejected_response_mask,
+                            args.dpo_beta);
+                    }
+                    last_train_metrics = train_metrics;
                     if (step == start_step && acc == 0) {
-                        if (!policy_chosen_logits->requires_grad() ||
-                            !policy_rejected_logits->requires_grad() ||
+                        if (!fwd.policy_chosen_logits->requires_grad() ||
+                            !fwd.policy_rejected_logits->requires_grad() ||
                             !loss->requires_grad()) {
                             throw runtime_error(
                                 "DPO debug: policy logits or loss are not attached to autograd");
@@ -617,6 +896,8 @@ int main(int argc, char** argv) {
                          << " (global " << (step + 1) << "/" << args.steps << ")"
                          << " | lr " << fixed << setprecision(6) << cur_lr
                          << " | dpo_loss " << setprecision(4) << avg_loss
+                         << " | reward_acc " << setprecision(4) << last_train_metrics.reward_accuracy
+                         << " | reward_margin " << setprecision(4) << last_train_metrics.reward_margin
                          << " | grad_norm " << setprecision(6) << grad_norm
                          << " | nonzero_grad_tensors " << nonzero_grad_tensors
                          << " | resp_tokens " << accum_tokens
@@ -628,6 +909,26 @@ int main(int argc, char** argv) {
                          << " | step_max=" << rss_step_max << " MB"
                          << " | peak=" << rss_peak_mb << " MB"
                          << endl;
+                    if (!args.metrics_out.empty()) {
+                        stringstream ss;
+                        ss << "{\"step\":" << (step + 1)
+                           << ",\"total_steps\":" << args.steps
+                           << ",\"epoch\":" << cur_epoch
+                           << ",\"loss\":" << avg_loss
+                           << ",\"lr\":" << cur_lr
+                           << ",\"tokens\":" << accum_tokens
+                           << ",\"total_tokens\":" << total_tokens
+                           << ",\"reward_accuracy\":" << last_train_metrics.reward_accuracy
+                           << ",\"reward_margin\":" << last_train_metrics.reward_margin
+                           << ",\"chosen_reward\":" << last_train_metrics.chosen_reward
+                           << ",\"rejected_reward\":" << last_train_metrics.rejected_reward
+                           << ",\"grad_norm\":" << grad_norm
+                           << ",\"rss_mb\":" << rss_step_max
+                           << ",\"peak_rss_mb\":" << rss_peak_mb
+                           << ",\"source\":\"native_dpo\""
+                           << "}";
+                        append_jsonl(args.metrics_out, ss.str());
+                    }
                 }
 
                 if ((step + 1) % 100 == 0) {
@@ -672,6 +973,10 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            auto train_t1 = std::chrono::steady_clock::now();
+            double train_seconds = std::chrono::duration<double>(train_t1 - train_t0).count();
+            cout << "[Timing] train_loop_seconds " << fixed << setprecision(4)
+                 << train_seconds << endl;
 
             cout << "\n[6/6] Save final LoRA weights..." << endl;
             if (!args.lora_out.empty()) {
@@ -956,6 +1261,23 @@ int main(int argc, char** argv) {
                      << " | step_max=" << rss_step_max << " MB"
                      << " | peak=" << rss_peak_mb << " MB"
                      << endl;
+                if (!args.metrics_out.empty()) {
+                    stringstream ss;
+                    ss << "{\"step\":" << (step + 1)
+                       << ",\"total_steps\":" << args.steps
+                       << ",\"epoch\":" << cur_epoch
+                       << ",\"loss\":" << avg_loss
+                       << ",\"ppl\":" << ppl
+                       << ",\"lr\":" << cur_lr
+                       << ",\"tokens\":" << accum_tokens
+                       << ",\"total_tokens\":" << total_tokens
+                       << ",\"grad_norm\":" << grad_norm
+                       << ",\"rss_mb\":" << rss_step_max
+                       << ",\"peak_rss_mb\":" << rss_peak_mb
+                       << ",\"source\":\"native_sft\""
+                       << "}";
+                    append_jsonl(args.metrics_out, ss.str());
+                }
             }
             
             // Every 100 steps, print memory stats (monitor total_allocated / total_in_use)

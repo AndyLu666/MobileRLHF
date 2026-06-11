@@ -23,6 +23,12 @@ object TrainingLogParser {
         var ppl: Double? = null,
         var lr: Double? = null,
         var tokens: Int? = null,
+        var rewardAccuracy: Double? = null,
+        var rewardMargin: Double? = null,
+        var chosenReward: Double? = null,
+        var rejectedReward: Double? = null,
+        var gradNorm: Double? = null,
+        var rssMb: Double? = null,
         var source: String = "log"
     ) {
         fun toImmutable(): StepMetric {
@@ -33,6 +39,12 @@ object TrainingLogParser {
                 ppl = ppl,
                 lr = lr,
                 tokens = tokens,
+                rewardAccuracy = rewardAccuracy,
+                rewardMargin = rewardMargin,
+                chosenReward = chosenReward,
+                rejectedReward = rejectedReward,
+                gradNorm = gradNorm,
+                rssMb = rssMb,
                 source = source
             )
         }
@@ -44,6 +56,14 @@ object TrainingLogParser {
 
     private val gemmaTrainPattern = Regex(
         """\[Step\s+(\d+)\]\s+Loss=([-+0-9.eE]+)\s+PPL=([-+0-9.eE]+)\s+LR=([-+0-9.eE]+)"""
+    )
+
+    private val dpoTrainPattern = Regex(
+        """\[Train\].*?global\s+(\d+)/(\d+).*?\|\s*lr\s*([-+0-9.eE]+)\s*\|\s*dpo_loss\s*([-+0-9.eE]+).*?\|\s*grad_norm\s*([-+0-9.eE]+).*?\|\s*resp_tokens\s+(\d+).*?\|\s*step_max=([-+0-9.eE]+)\s*MB"""
+    )
+
+    private val dpoEvalPattern = Regex(
+        """\[Eval\].*?\|\s*step\s+(\d+).*?\|\s*loss\s*([-+0-9.eE]+).*?\|\s*reward_acc\s*([-+0-9.eE]+).*?\|\s*reward_margin\s*([-+0-9.eE]+).*?\|\s*ema_loss\s*([-+0-9.eE]+).*?\|\s*total_tokens\s+(\d+)"""
     )
 
     private val rssSummaryPattern = Regex(
@@ -59,7 +79,7 @@ object TrainingLogParser {
         RegexOption.IGNORE_CASE
     )
     private val totalStepsPattern = Regex(
-        """(?:total\s*steps|steps|\u603b\u6b65\u6570)[:]?\s*(\d+)""",
+        """(?:total[_\s]*steps|steps|\u603b\u6b65\u6570)\s*:?\s*(\d+)""",
         RegexOption.IGNORE_CASE
     )
     private val stepInEventPattern = Regex("""(?:global\s+|step=)(\d+)""")
@@ -78,6 +98,8 @@ object TrainingLogParser {
 
         var hasCompletionMarker = false
         var hasFailureMarker = false
+        var hasStoppedMarker = false
+        var hasRunningMarker = false
 
         for (line in lines) {
             parseTrainLine(line, metrics)
@@ -105,14 +127,32 @@ object TrainingLogParser {
 
             val lower = line.lowercase()
             if (
+                "training complete" in lower ||
                 "training completed" in lower ||
                 "lora training completed" in lower ||
                 completeCnMarker in line
             ) {
                 hasCompletionMarker = true
             }
+            if ("[stopped]" in lower || "user requested stop" in lower) {
+                hasStoppedMarker = true
+            }
             if ("error" in lower || "failed" in lower) {
                 hasFailureMarker = true
+            }
+            if (
+                "[config]" in lower ||
+                "[1/6]" in lower ||
+                "[2/6]" in lower ||
+                "[3/6]" in lower ||
+                "[4/6]" in lower ||
+                "[5/6]" in lower ||
+                "[6/6]" in lower ||
+                "load pretrained model" in lower ||
+                "load dataset" in lower ||
+                "start training" in lower
+            ) {
+                hasRunningMarker = true
             }
 
             classifyEvent(line)?.let { type ->
@@ -131,9 +171,10 @@ object TrainingLogParser {
             .sortedBy { it.step }
 
         val status = when {
+            hasStoppedMarker -> RunStatus.STOPPED
             hasFailureMarker -> RunStatus.FAILED
             hasCompletionMarker -> RunStatus.COMPLETED
-            mergedMetrics.isNotEmpty() -> RunStatus.RUNNING
+            mergedMetrics.isNotEmpty() || hasRunningMarker -> RunStatus.RUNNING
             else -> RunStatus.IDLE
         }
 
@@ -155,6 +196,40 @@ object TrainingLogParser {
     }
 
     private fun parseTrainLine(line: String, metrics: MutableMap<Int, MutableMetric>) {
+        dpoTrainPattern.find(line)?.let { match ->
+            val step = match.groupValues[1].toIntOrNull() ?: return@let
+            val total = match.groupValues[2].toIntOrNull()
+            val lr = match.groupValues[3].toDoubleOrNull()
+            val loss = match.groupValues[4].toDoubleOrNull()
+            val gradNorm = match.groupValues[5].toDoubleOrNull()
+            val tokens = match.groupValues[6].toIntOrNull()
+            val rssMb = match.groupValues[7].toDoubleOrNull()
+            val metric = metrics.getOrPut(step) { MutableMetric(step) }
+            metric.totalSteps = total ?: metric.totalSteps
+            metric.lr = lr ?: metric.lr
+            metric.loss = loss ?: metric.loss
+            metric.gradNorm = gradNorm ?: metric.gradNorm
+            metric.tokens = tokens ?: metric.tokens
+            metric.rssMb = rssMb ?: metric.rssMb
+            metric.source = "dpo"
+            return
+        }
+
+        dpoEvalPattern.find(line)?.let { match ->
+            val step = match.groupValues[1].toIntOrNull() ?: return@let
+            val loss = match.groupValues[2].toDoubleOrNull()
+            val rewardAccuracy = match.groupValues[3].toDoubleOrNull()
+            val rewardMargin = match.groupValues[4].toDoubleOrNull()
+            val tokens = match.groupValues[6].toIntOrNull()
+            val metric = metrics.getOrPut(step) { MutableMetric(step) }
+            metric.loss = loss ?: metric.loss
+            metric.rewardAccuracy = rewardAccuracy ?: metric.rewardAccuracy
+            metric.rewardMargin = rewardMargin ?: metric.rewardMargin
+            metric.tokens = tokens ?: metric.tokens
+            metric.source = "dpo_eval"
+            return
+        }
+
         gpt2TrainPattern.find(line)?.let { match ->
             val step = match.groupValues[1].toIntOrNull() ?: return@let
             val total = match.groupValues[2].toIntOrNull()
@@ -189,10 +264,12 @@ object TrainingLogParser {
         val lower = line.lowercase()
         return when {
             "[eval]" in lower -> EventType.EVAL
+            Regex("""\[[1-6]/6\]""").containsMatchIn(line) -> EventType.INFO
             "[checkpoint]" in lower -> EventType.CHECKPOINT
             "[memcleanup]" in lower -> EventType.CLEANUP
             "[rsssummary]" in lower || "[rssstep]" in lower -> EventType.RSS
             "[energy]" in lower || "sleep_ms" in lower -> EventType.ENERGY
+            "[stopped]" in lower || "user requested stop" in lower -> EventType.WARNING
             "⚠" in line || "warn" in lower -> EventType.WARNING
             "error" in lower || "failed" in lower -> EventType.ERROR
             "[train]" in lower || "[step " in lower -> EventType.INFO
@@ -261,6 +338,12 @@ object TrainingLogParser {
                 ppl = findDouble(trimmed, "ppl"),
                 lr = findDouble(trimmed, "lr"),
                 tokens = findInt(trimmed, "tokens"),
+                rewardAccuracy = findDouble(trimmed, "reward_accuracy"),
+                rewardMargin = findDouble(trimmed, "reward_margin"),
+                chosenReward = findDouble(trimmed, "chosen_reward"),
+                rejectedReward = findDouble(trimmed, "rejected_reward"),
+                gradNorm = findDouble(trimmed, "grad_norm"),
+                rssMb = findDouble(trimmed, "rss_mb"),
                 source = "ndjson"
             )
             metrics += metric

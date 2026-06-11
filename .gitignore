@@ -41,6 +41,15 @@ pytorch_runs/
 *.log
 *.jsonl
 !review-stage/data/*.jsonl
+!android-visualizer/app/src/main/assets/**/*.jsonl
+
+# Local QA artifacts and downloaded third-party source trees
+verification/
+third_party/OpenBLAS-*/
+third_party/OpenBLAS-*.tar.gz
+!third_party/openblas-android-arm64/
+!third_party/openblas-android-arm64/**
+!third_party/openblas-android-arm64/lib/*.a
 
 # Python
 __pycache__/

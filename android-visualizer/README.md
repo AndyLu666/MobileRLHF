@@ -170,6 +170,16 @@ If `adb` is not in your PATH, use the full path:
 adb push /path/to/runs/my_gpt2_run /sdcard/Download/mft_runs/my_gpt2_run
 ```
 
+For the current offline HFRL vertical slice, use a run folder that contains both
+`train.log` and `metrics.ndjson`:
+
+```bash
+adb push ../runs/hfrl_offline_android_smoke_batched_dpo /sdcard/Download/mft_runs/
+```
+
+The app detects reward metrics in `metrics.ndjson` and switches the overview and
+training cards/charts to HFRL-style reward accuracy and reward margin.
+
 ### Option B — Access logs on the phone directly
 
 If training runs on the phone itself, the log files are already on-device.
@@ -187,6 +197,12 @@ If training runs on the phone itself, the log files are already on-device.
 ## Demo Mode
 
 Tap **Load Demo** to load 220 synthetic training steps with two mock runs (GPT-2 primary vs. Gemma compare). The demo updates in real time at ~1.2 s/step, exercising all five tabs and chart interactions without needing any actual training data.
+
+Tap **Test DPO** to load an 80-step HFRL/DPO telemetry demo directly in the app.
+This bypasses the Android folder picker and is intended for quick UI validation
+of reward accuracy, reward margin, chosen/rejected rewards, grad norm, and RSS.
+It is a simulated telemetry source; real on-device native trainer launch is the
+next integration step.
 
 ---
 
@@ -246,6 +262,20 @@ Run a full on-device acceptance pass (build, install, auto tab switching, video 
   --video-seconds 36 \
   --shot-interval 4
 ```
+
+To validate the offline HFRL run-folder path on a connected device:
+
+```bash
+./scripts/qa/mobile_device_qa.sh \
+  --push-run ../runs/hfrl_offline_android_smoke_batched_dpo \
+  --no-demo \
+  --out-dir verification/hfrl_device_qa_latest \
+  --video-seconds 36 \
+  --shot-interval 4
+```
+
+After launch, tap **Select Runs** and choose `/sdcard/Download/mft_runs`; the
+report records the pushed source and device path.
 
 Outputs:
 

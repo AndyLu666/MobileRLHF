@@ -11,6 +11,7 @@ option(ENABLE_MEMORY_MODULE "Enable Memory module (param mgmt / Zero)" ON)
 option(ENABLE_ACTIVATIONS_MODULE "Enable Activations module (ckpt/activation mgmt)" ON)
 option(USE_ARENA_ALLOCATOR "Use arena allocator (control RSS growth)" OFF)
 option(USE_BLAS "Enable BLAS acceleration (ON=Accelerate/OpenBLAS, OFF=pure C++)" OFF)
+set(OPENBLAS_ROOT "" CACHE PATH "OpenBLAS root for cross builds; expected include/cblas.h and lib/libopenblas.{a,so}")
 option(DISABLE_MEMORY_POOL "Disable custom memory pool; tensors use system malloc/free" OFF)
 option(ENABLE_SHARDING_MODULE "Enable parameter sharding module" OFF)
 option(ENABLE_ENERGY_MONITOR "Enable power/energy monitor" OFF)
@@ -192,13 +193,36 @@ if(USE_BLAS)
             target_compile_definitions(operators PUBLIC DISABLE_BLAS_COMPLETELY)
         endif()
     else()
-        # Linux/Windows: try OpenBLAS or MKL
-        find_package(BLAS)
-        if(BLAS_FOUND)
+        # Android/Linux/Windows: prefer an explicit OpenBLAS root, then try CMake BLAS.
+        if(OPENBLAS_ROOT)
+            find_path(OPENBLAS_INCLUDE_DIR
+                NAMES cblas.h
+                PATHS "${OPENBLAS_ROOT}/include"
+                NO_DEFAULT_PATH
+                NO_CMAKE_FIND_ROOT_PATH
+            )
+            find_library(OPENBLAS_LIBRARY
+                NAMES openblas
+                PATHS "${OPENBLAS_ROOT}/lib"
+                NO_DEFAULT_PATH
+                NO_CMAKE_FIND_ROOT_PATH
+            )
+        endif()
+
+        if(OPENBLAS_INCLUDE_DIR AND OPENBLAS_LIBRARY)
+            target_include_directories(operators PUBLIC ${OPENBLAS_INCLUDE_DIR})
+            target_link_libraries(operators PUBLIC ${OPENBLAS_LIBRARY})
+            target_compile_definitions(operators PUBLIC USE_BLAS)
+            message(STATUS "✅ Linked OpenBLAS: ${OPENBLAS_LIBRARY}")
+        else()
+            find_package(BLAS)
+        endif()
+
+        if(BLAS_FOUND AND NOT (OPENBLAS_INCLUDE_DIR AND OPENBLAS_LIBRARY))
             target_link_libraries(operators PUBLIC ${BLAS_LIBRARIES})
             target_compile_definitions(operators PUBLIC USE_BLAS)
             message(STATUS "✅ Linked BLAS: ${BLAS_LIBRARIES}")
-        else()
+        elseif(NOT (OPENBLAS_INCLUDE_DIR AND OPENBLAS_LIBRARY))
             message(WARNING "BLAS not found, falling back to pure C++ implementation")
             target_compile_definitions(operators PUBLIC DISABLE_BLAS_COMPLETELY)
         endif()

@@ -289,6 +289,74 @@ TensorPtr dpo_loss(const TensorPtr& policy_chosen_logits,
     return out;
 }
 
+TensorPtr dpo_loss_with_ref_logps(const TensorPtr& policy_chosen_logits,
+                                  const TensorPtr& policy_rejected_logits,
+                                  const std::vector<float>& ref_chosen_logps,
+                                  const std::vector<float>& ref_rejected_logps,
+                                  const TensorPtr& chosen_input_ids,
+                                  const TensorPtr& rejected_input_ids,
+                                  const TensorPtr& chosen_response_mask,
+                                  const TensorPtr& rejected_response_mask,
+                                  float beta) {
+    auto policy_chosen_logps = compute_sequence_logps(
+        policy_chosen_logits, chosen_input_ids, chosen_response_mask);
+    auto policy_rejected_logps = compute_sequence_logps(
+        policy_rejected_logits, rejected_input_ids, rejected_response_mask);
+
+    const size_t n = policy_chosen_logps.size();
+    if (n == 0 || policy_rejected_logps.size() != n ||
+        ref_chosen_logps.size() != n || ref_rejected_logps.size() != n) {
+        throw std::runtime_error("dpo_loss_with_ref_logps: inconsistent batch sizes");
+    }
+
+    double loss_sum = 0.0;
+    std::vector<double> chosen_coeffs(n, 0.0);
+    std::vector<double> rejected_coeffs(n, 0.0);
+    const double inv_n = 1.0 / static_cast<double>(n);
+
+    for (size_t i = 0; i < n; ++i) {
+        const double pi_logratio =
+            static_cast<double>(policy_chosen_logps[i]) - static_cast<double>(policy_rejected_logps[i]);
+        const double ref_logratio =
+            static_cast<double>(ref_chosen_logps[i]) - static_cast<double>(ref_rejected_logps[i]);
+        const double logit = static_cast<double>(beta) * (pi_logratio - ref_logratio);
+
+        loss_sum += negative_log_sigmoid(logit);
+
+        const double dloss_dlogit = sigmoid_minus_one(logit);
+        const double dloss_dseq = dloss_dlogit * static_cast<double>(beta) * inv_n;
+        chosen_coeffs[i] = dloss_dseq;
+        rejected_coeffs[i] = -dloss_dseq;
+    }
+
+    auto out = full({1}, static_cast<float>(loss_sum * inv_n), kFloat32, kCPU);
+    if (policy_chosen_logits->requires_grad() || policy_rejected_logits->requires_grad()) {
+        out->set_requires_grad(true);
+        auto backward_fn = std::make_shared<DPOBackward>(
+            policy_chosen_logits,
+            policy_rejected_logits,
+            chosen_input_ids,
+            rejected_input_ids,
+            chosen_response_mask,
+            rejected_response_mask,
+            std::move(chosen_coeffs),
+            std::move(rejected_coeffs));
+#ifdef USE_NEW_AUTOGRAD_ENGINE
+        std::vector<TensorPtr> inputs = {policy_chosen_logits, policy_rejected_logits};
+        autograd::Engine::instance().register_node(out, inputs, backward_fn);
+#else
+        out->set_grad_fn([backward_fn, policy_chosen_logits, policy_rejected_logits](const TensorPtr& grad_output)
+                             -> std::vector<TensorPtr> {
+            auto grads = backward_fn->apply(grad_output);
+            if (policy_chosen_logits->requires_grad()) accumulate_gradient(policy_chosen_logits, grads[0]);
+            if (policy_rejected_logits->requires_grad()) accumulate_gradient(policy_rejected_logits, grads[1]);
+            return grads;
+        });
+#endif
+    }
+    return out;
+}
+
 DPOMetrics compute_dpo_metrics_from_logps(const std::vector<float>& policy_chosen_logps,
                                           const std::vector<float>& policy_rejected_logps,
                                           const std::vector<float>& ref_chosen_logps,
@@ -355,6 +423,29 @@ DPOMetrics compute_dpo_metrics_from_logits(const TensorPtr& policy_chosen_logits
         ref_chosen_logits, chosen_input_ids, chosen_response_mask);
     auto ref_rejected_logps = sequence_logprob_masked(
         ref_rejected_logits, rejected_input_ids, rejected_response_mask);
+
+    return compute_dpo_metrics_from_logps(
+        policy_chosen_logps,
+        policy_rejected_logps,
+        ref_chosen_logps,
+        ref_rejected_logps,
+        beta);
+}
+
+DPOMetrics compute_dpo_metrics_from_policy_logits_and_ref_logps(
+    const TensorPtr& policy_chosen_logits,
+    const TensorPtr& policy_rejected_logits,
+    const std::vector<float>& ref_chosen_logps,
+    const std::vector<float>& ref_rejected_logps,
+    const TensorPtr& chosen_input_ids,
+    const TensorPtr& rejected_input_ids,
+    const TensorPtr& chosen_response_mask,
+    const TensorPtr& rejected_response_mask,
+    float beta) {
+    auto policy_chosen_logps = sequence_logprob_masked(
+        policy_chosen_logits, chosen_input_ids, chosen_response_mask);
+    auto policy_rejected_logps = sequence_logprob_masked(
+        policy_rejected_logits, rejected_input_ids, rejected_response_mask);
 
     return compute_dpo_metrics_from_logps(
         policy_chosen_logps,

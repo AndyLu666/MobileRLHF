@@ -18,10 +18,14 @@ except ImportError as e:  # pragma: no cover - import-time guard
     raise SystemExit("Please install peft to run this script: pip install peft") from e
 
 from pytorch_alignment.dpo_utils import (
+    BinaryFeedbackDataset,
     PreferenceDataset,
+    binary_feedback_collate_batch,
     compute_dpo_batch_metrics,
+    compute_kto_batch_metrics,
     dpo_collate_batch,
     evaluate_dpo,
+    evaluate_kto,
 )
 
 
@@ -247,11 +251,16 @@ def main():
     parser.add_argument("--save_every", type=int, default=0)
     parser.add_argument("--ema_beta", type=float, default=0.9)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--train_mode", type=str, default="sft", choices=["sft", "dpo"])
+    parser.add_argument("--train_mode", type=str, default="sft", choices=["sft", "dpo", "kto"])
     parser.add_argument("--preference_jsonl", type=str, default="")
     parser.add_argument("--preference_valid_jsonl", type=str, default="")
+    parser.add_argument("--binary_feedback_jsonl", type=str, default="")
+    parser.add_argument("--binary_feedback_valid_jsonl", type=str, default="")
     parser.add_argument("--reference_model_dir", type=str, default="")
     parser.add_argument("--dpo_beta", type=float, default=0.1)
+    parser.add_argument("--dpo_loss_type", type=str, default="sigmoid", choices=["sigmoid", "robust", "ipo", "sigmoid_norm"])
+    parser.add_argument("--kto_desirable_weight", type=float, default=1.0)
+    parser.add_argument("--kto_undesirable_weight", type=float, default=1.0)
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -263,6 +272,7 @@ def main():
 
     use_jsonl = bool(args.jsonl_train)
     use_dpo = args.train_mode == "dpo"
+    use_kto = args.train_mode == "kto"
     if use_dpo:
         if not args.preference_jsonl:
             raise SystemExit("--preference_jsonl is required when --train_mode dpo")
@@ -273,6 +283,16 @@ def main():
             else train_dataset
         )
         collate_fn = dpo_collate_batch
+    elif use_kto:
+        if not args.binary_feedback_jsonl:
+            raise SystemExit("--binary_feedback_jsonl is required when --train_mode kto")
+        train_dataset = BinaryFeedbackDataset(args.binary_feedback_jsonl, tok, args.seq_len)
+        valid_dataset = (
+            BinaryFeedbackDataset(args.binary_feedback_valid_jsonl, tok, args.seq_len)
+            if args.binary_feedback_valid_jsonl
+            else train_dataset
+        )
+        collate_fn = binary_feedback_collate_batch
     elif use_jsonl:
         train_dataset: Dataset = JsonlMaskedDataset(args.jsonl_train, args.seq_len, tok.pad_token_id)
         valid_dataset: Dataset = (
@@ -321,7 +341,7 @@ def main():
 
     model = GPT2LMHeadModel.from_pretrained(args.pretrained_dir)
     ref_model = None
-    if use_dpo:
+    if use_dpo or use_kto:
         ref_dir = args.reference_model_dir or args.pretrained_dir
         ref_model = GPT2LMHeadModel.from_pretrained(ref_dir).to(device)
         ref_model.eval()
@@ -367,8 +387,18 @@ def main():
             batch = next(train_iter)
             batch = {k: v.to(device) for k, v in batch.items()}
             if use_dpo:
-                dpo_metrics = compute_dpo_batch_metrics(model, ref_model, batch, args.dpo_beta)
+                dpo_metrics = compute_dpo_batch_metrics(model, ref_model, batch, args.dpo_beta, args.dpo_loss_type)
                 loss = dpo_metrics["loss"]
+            elif use_kto:
+                kto_metrics = compute_kto_batch_metrics(
+                    model,
+                    ref_model,
+                    batch,
+                    args.dpo_beta,
+                    desirable_weight=args.kto_desirable_weight,
+                    undesirable_weight=args.kto_undesirable_weight,
+                )
+                loss = kto_metrics["loss"]
             else:
                 out = model(**batch)
                 loss = out.loss
@@ -376,6 +406,8 @@ def main():
             accum_loss += loss.item()
             if use_dpo:
                 accum_tokens += count_tokens(batch["chosen_attention_mask"])
+            elif use_kto:
+                accum_tokens += count_tokens(batch["attention_mask"])
             else:
                 accum_tokens += count_tokens(batch["attention_mask"])
 
@@ -406,6 +438,16 @@ def main():
                     f"rejected_reward {dpo_metrics['rejected_reward'].item():.4f} "
                     f"ema_loss {ema_loss:.4f} tokens {accum_tokens}"
                 )
+            elif use_kto:
+                print(
+                    f"[Train] step {step + 1}/{total_steps} "
+                    f"lr {cur_lr:.6f} loss {avg_loss:.4f} "
+                    f"reward_acc {kto_metrics['reward_accuracy'].item():.4f} "
+                    f"reward_margin {kto_metrics['reward_margin'].item():.4f} "
+                    f"chosen_reward {kto_metrics['chosen_reward'].item():.4f} "
+                    f"rejected_reward {kto_metrics['rejected_reward'].item():.4f} "
+                    f"ema_loss {ema_loss:.4f} tokens {accum_tokens}"
+                )
             else:
                 ppl = math.exp(avg_loss)
                 print(
@@ -416,7 +458,7 @@ def main():
 
         if args.eval_interval > 0 and (step + 1) % args.eval_interval == 0:
             if use_dpo:
-                eval_metrics = evaluate_dpo(model, ref_model, eval_loader, device, args.eval_batches, args.dpo_beta)
+                eval_metrics = evaluate_dpo(model, ref_model, eval_loader, device, args.eval_batches, args.dpo_beta, args.dpo_loss_type)
                 print(
                     f"[Eval] step {step + 1}/{total_steps} "
                     f"loss {eval_metrics['loss']:.4f} "
@@ -430,6 +472,37 @@ def main():
                         "loss": eval_metrics["loss"],
                         "reward_acc": eval_metrics["reward_accuracy"],
                         "reward_margin": eval_metrics["reward_margin"],
+                        "ema_loss": ema_loss,
+                        "total_tokens": token_counter,
+                    }
+                    with open(args.eval_out, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(rec) + "\n")
+            elif use_kto:
+                eval_metrics = evaluate_kto(
+                    model,
+                    ref_model,
+                    eval_loader,
+                    device,
+                    args.eval_batches,
+                    args.dpo_beta,
+                    desirable_weight=args.kto_desirable_weight,
+                    undesirable_weight=args.kto_undesirable_weight,
+                )
+                print(
+                    f"[Eval] step {step + 1}/{total_steps} "
+                    f"loss {eval_metrics['loss']:.4f} "
+                    f"reward_acc {eval_metrics['reward_accuracy']:.4f} "
+                    f"reward_margin {eval_metrics['reward_margin']:.4f} "
+                    f"ema_loss {ema_loss:.4f} total_tokens {token_counter}"
+                )
+                if args.eval_out:
+                    rec = {
+                        "step": step + 1,
+                        "loss": eval_metrics["loss"],
+                        "reward_acc": eval_metrics["reward_accuracy"],
+                        "reward_margin": eval_metrics["reward_margin"],
+                        "chosen_reward": eval_metrics["chosen_reward"],
+                        "rejected_reward": eval_metrics["rejected_reward"],
                         "ema_loss": ema_loss,
                         "total_tokens": token_counter,
                     }

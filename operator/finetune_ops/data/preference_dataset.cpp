@@ -242,7 +242,9 @@ PreferenceBatch PreferenceDataset::get_batch(size_t batch_idx) const {
     std::memset(r_resp, 0, actual_batch_size * cfg_.seq_len * sizeof(int32_t));
 
     for (size_t b = 0; b < actual_batch_size; ++b) {
-        const auto& sample = samples_[order_[start + b]];
+        const size_t sample_idx = order_[start + b];
+        batch.sample_indices.push_back(sample_idx);
+        const auto& sample = samples_[sample_idx];
         for (int i = 0; i < cfg_.seq_len; ++i) {
             c_ids[b * cfg_.seq_len + i] = sample.chosen_input_ids[i];
             c_attn[b * cfg_.seq_len + i] = static_cast<float>(sample.chosen_attention_mask[i]);

@@ -24,6 +24,9 @@ SKIP_BUILD=0
 SKIP_INSTALL=0
 LOAD_DEMO=1
 ENABLE_RECORD=1
+PUSH_RUN=""
+REMOTE_RUN_ROOT="/sdcard/Download/mft_runs"
+REMOTE_RUN_PATH=""
 
 SCREEN_W=0
 SCREEN_H=0
@@ -47,6 +50,8 @@ Options:
   --skip-install         Skip APK install step
   --no-demo              Do not tap "Load Demo"
   --no-record            Do not run screen recording
+  --push-run <path>      Push a local run folder before QA, e.g. runs/hfrl_offline_android_smoke_batched_dpo
+  --remote-run-root <p>  Device parent directory for pushed runs (default: /sdcard/Download/mft_runs)
   -h, --help             Show this help
 USAGE
 }
@@ -129,6 +134,16 @@ parse_args() {
                 ENABLE_RECORD=0
                 shift
                 ;;
+            --push-run)
+                PUSH_RUN="${2:-}"
+                [[ -n "$PUSH_RUN" ]] || die "--push-run requires a value"
+                shift 2
+                ;;
+            --remote-run-root)
+                REMOTE_RUN_ROOT="${2:-}"
+                [[ -n "$REMOTE_RUN_ROOT" ]] || die "--remote-run-root requires a value"
+                shift 2
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -138,6 +153,31 @@ parse_args() {
                 ;;
         esac
     done
+}
+
+push_run_folder() {
+    local src="$1"
+    local name
+
+    if [[ ! -d "$src" ]]; then
+        die "Run folder not found: $src"
+    fi
+    if [[ ! -f "${src}/train.log" ]]; then
+        die "Run folder must contain train.log: $src"
+    fi
+    if [[ ! -f "${src}/metrics.ndjson" && ! -f "${src}/metrics.jsonl" ]]; then
+        warn "Run folder has no metrics.ndjson or metrics.jsonl; reward charts may be unavailable."
+    fi
+
+    name="$(basename "$src")"
+    REMOTE_RUN_PATH="${REMOTE_RUN_ROOT}/${name}"
+
+    log "Preparing device run root: ${REMOTE_RUN_ROOT}"
+    adb_cmd shell mkdir -p "$REMOTE_RUN_ROOT" >/dev/null
+    adb_cmd shell rm -rf "$REMOTE_RUN_PATH" >/dev/null 2>&1 || true
+    log "Pushing run folder: ${src} -> ${REMOTE_RUN_PATH}"
+    adb_cmd push "$src" "$REMOTE_RUN_ROOT/" >/dev/null
+    log "Pushed run. In the app, select parent folder: ${REMOTE_RUN_ROOT}"
 }
 
 ADB_ARGS=()
@@ -404,6 +444,9 @@ write_report() {
         echo "Video seconds: ${VIDEO_SECONDS}"
         echo "Shot interval: ${SHOT_INTERVAL}"
         echo "Load demo: ${LOAD_DEMO}"
+        echo "Pushed run source: ${PUSH_RUN:-none}"
+        echo "Pushed run device path: ${REMOTE_RUN_PATH:-none}"
+        echo "App run picker parent: ${REMOTE_RUN_ROOT}"
         echo
         echo "Warnings (${#WARNINGS[@]}):"
         if [[ ${#WARNINGS[@]} -eq 0 ]]; then
@@ -450,6 +493,10 @@ main() {
     log "Using device serial: ${SERIAL}"
     log "Output directory: ${OUT_DIR}"
     log "Using adb binary: ${ADB_BIN}"
+
+    if [[ -n "$PUSH_RUN" ]]; then
+        push_run_folder "$PUSH_RUN"
+    fi
 
     if [[ "$SKIP_BUILD" -eq 0 ]]; then
         log "Building APK..."

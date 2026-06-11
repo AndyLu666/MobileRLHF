@@ -21,6 +21,7 @@ fun StatusPill(status: RunStatus, modifier: Modifier = Modifier) {
     val (label, color) = when (status) {
         RunStatus.IDLE -> "Idle" to Color(0xFF9A8F80)
         RunStatus.RUNNING -> "Running" to Color(0xFF2A8D60)
+        RunStatus.STOPPED -> "Stopped" to Color(0xFFFF9500)
         RunStatus.COMPLETED -> "Completed" to Color(0xFF2A6CC2)
         RunStatus.FAILED -> "Failed" to Color(0xFFC23831)
     }

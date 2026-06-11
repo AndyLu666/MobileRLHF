@@ -1,10 +1,16 @@
 import argparse
 import json
+import sys
 from typing import Optional
+from pathlib import Path
 
 import torch
 from peft import PeftModel
 from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from pytorch_alignment.dpo_utils import PreferenceDataset, dpo_collate_batch, sequence_logprob
 
@@ -59,10 +65,13 @@ def main():
     margin = chosen_logps - rejected_logps
     chosen_lengths = batch["chosen_response_mask"][:, 1:].sum(dim=-1).clamp_min(1).to(torch.float32)
     rejected_lengths = batch["rejected_response_mask"][:, 1:].sum(dim=-1).clamp_min(1).to(torch.float32)
+    normalized_margin = (chosen_logps / chosen_lengths) - (rejected_logps / rejected_lengths)
     report = {
         "num_samples": len(dataset),
         "pair_accuracy": float((margin > 0).to(torch.float32).mean().item()),
         "mean_pair_margin": float(margin.mean().item()),
+        "length_normalized_pair_accuracy": float((normalized_margin > 0).to(torch.float32).mean().item()),
+        "mean_length_normalized_pair_margin": float(normalized_margin.mean().item()),
         "chosen_logprob_per_token": float((chosen_logps / chosen_lengths).mean().item()),
         "rejected_logprob_per_token": float((rejected_logps / rejected_lengths).mean().item()),
         "adapter_dir": args.adapter_dir or "",

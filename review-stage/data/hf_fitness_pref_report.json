@@ -1,0 +1,17 @@
+{
+  "dataset": "victor203/fitness-preferences",
+  "cache_dir": "/Users/anakinju/.cache/huggingface/datasets/victor203___fitness-preferences/default/0.0.0/6cd455f64987a4fba783b0c52126e21ecc8f2b24",
+  "train_rows": 42,
+  "eval_rows": 12,
+  "features": [
+    "prompt",
+    "chosen",
+    "rejected",
+    "source",
+    "split",
+    "row_index",
+    "metadata"
+  ],
+  "train_output": "review-stage/data/hf_fitness_pref_train.jsonl",
+  "eval_output": "review-stage/data/hf_fitness_pref_eval.jsonl"
+}

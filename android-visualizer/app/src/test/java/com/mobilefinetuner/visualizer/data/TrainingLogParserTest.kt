@@ -69,7 +69,7 @@ class TrainingLogParserTest {
     fun parseMetricsNdjson_extractsMetrics() {
         val lines = listOf(
             "{\"step\":1,\"loss\":4.2,\"ppl\":66.9,\"lr\":0.0002,\"tokens\":1024}",
-            "{\"step\":2,\"loss\":4.0,\"ppl\":54.1,\"lr\":0.00019,\"tokens\":1024}"
+            "{\"step\":2,\"loss\":4.0,\"ppl\":54.1,\"lr\":0.00019,\"tokens\":1024,\"reward_accuracy\":0.75,\"reward_margin\":0.42,\"chosen_reward\":0.2,\"rejected_reward\":-0.22,\"grad_norm\":1.0,\"rss_mb\":1840.5}"
         )
 
         val metrics = TrainingLogParser.parseMetricsNdjson(lines)
@@ -78,6 +78,63 @@ class TrainingLogParserTest {
         assertThat(metrics[0].step).isEqualTo(1)
         assertThat(metrics[1].loss).isWithin(1e-6).of(4.0)
         assertThat(metrics[1].tokens).isEqualTo(1024)
+        assertThat(metrics[1].rewardAccuracy).isWithin(1e-6).of(0.75)
+        assertThat(metrics[1].rewardMargin).isWithin(1e-6).of(0.42)
+        assertThat(metrics[1].chosenReward).isWithin(1e-6).of(0.2)
+        assertThat(metrics[1].rejectedReward).isWithin(1e-6).of(-0.22)
+        assertThat(metrics[1].gradNorm).isWithin(1e-6).of(1.0)
+        assertThat(metrics[1].rssMb).isWithin(1e-6).of(1840.5)
+    }
+
+    @Test
+    fun parseDpoTrainAndEvalLog_extractsHfrlMetrics() {
+        val lines = listOf(
+            "[Train] epoch 1/0 | step 1/16 (global 1/4) | lr 0.000500 | dpo_loss 0.6931 | grad_norm 1.000000 | nonzero_grad_tensors 24 | resp_tokens 18 | RSS(pre/fwd/bwd/opt/post)=100.0/150.0/170.0/171.0/169.0 MB | step_max=171.0 MB | peak=171.0 MB",
+            "[Eval] epoch 1 | step 1 | loss 0.6862 | reward_acc 0.6200 | reward_margin 0.0149 | ema_loss 0.6931 | total_tokens 18"
+        )
+
+        val parsed = TrainingLogParser.parseTrainLog(lines)
+
+        assertThat(parsed.metrics).hasSize(1)
+        val metric = parsed.metrics.single()
+        assertThat(metric.step).isEqualTo(1)
+        assertThat(metric.totalSteps).isEqualTo(4)
+        assertThat(metric.loss).isWithin(1e-6).of(0.6862)
+        assertThat(metric.lr).isWithin(1e-10).of(0.0005)
+        assertThat(metric.tokens).isEqualTo(18)
+        assertThat(metric.gradNorm).isWithin(1e-6).of(1.0)
+        assertThat(metric.rssMb).isWithin(1e-6).of(171.0)
+        assertThat(metric.rewardAccuracy).isWithin(1e-6).of(0.62)
+        assertThat(metric.rewardMargin).isWithin(1e-6).of(0.0149)
+    }
+
+    @Test
+    fun parseNativeDemoStopMarker_returnsStoppedStatus() {
+        val lines = listOf(
+            "[1/6] Load pretrained model...",
+            "[Stopped] User requested stop. Sending TERM to native pid 12345."
+        )
+
+        val parsed = TrainingLogParser.parseTrainLog(lines)
+
+        assertThat(parsed.status).isEqualTo(RunStatus.STOPPED)
+        assertThat(parsed.events.map { it.message }).contains(lines.last())
+    }
+
+    @Test
+    fun parseNativeDemoStartupStage_returnsRunningBeforeFirstStep() {
+        val lines = listOf(
+            "[1/6] Load pretrained model...",
+            "  total_steps    : 80",
+            "[GPT2Model] Initialized with 12 layers, 768 hidden, 12 heads"
+        )
+
+        val parsed = TrainingLogParser.parseTrainLog(lines)
+
+        assertThat(parsed.status).isEqualTo(RunStatus.RUNNING)
+        assertThat(parsed.metrics).isEmpty()
+        assertThat(parsed.summary.totalSteps).isEqualTo(80)
+        assertThat(parsed.events.map { it.message }).contains(lines.first())
     }
 
     @Test
