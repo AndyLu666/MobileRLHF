@@ -1,6 +1,6 @@
 # MobileFineTuner Android Visualizer
 
-A research-grade Android dashboard for monitoring and visualizing on-device LLM fine-tuning in real time. Designed as the companion app to the [MobileFineTuner](https://github.com/your-repo/MobileFineTuner) framework — a pure C++17 system that fine-tunes GPT-2, Gemma, and Qwen models directly on mobile hardware.
+A research-grade Android dashboard for monitoring and visualizing MobileFineTuner runs in real time. It is designed as the companion app to the [MobileFineTuner](https://github.com/your-repo/MobileFineTuner) C++17 core; the current release validates Android native execution with synthetic Qwen LoRA smoke tests, while full-weight model training requires externally supplied assets and device-specific validation.
 
 ---
 
@@ -119,6 +119,31 @@ Output APK:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Build the reusable MobileFineTuner Android SDK AAR:
+
+```bash
+cd android-visualizer
+./gradlew :mft-sdk:assembleRelease
+```
+
+Output AAR:
+
+```
+mft-sdk/build/outputs/aar/mft-sdk-release.aar
+```
+
+Publish the SDK to a local Maven repository:
+
+```bash
+bash ../scripts/android/publish_mft_sdk_local.sh
+```
+
+Build the standalone SDK sample app:
+
+```bash
+./gradlew :sdk-sample:assembleDebug
+```
+
 For a release-signed build, configure `keystore.properties` and run:
 
 ```bash
@@ -210,6 +235,14 @@ next integration step.
 
 ```
 android-visualizer/
+├── mft-sdk/                              # Android Library / AAR SDK wrapper
+│   └── src/main/
+│       ├── java/com/mobilefinetuner/sdk/
+│       │   └── MobileFineTuner.java     # Java API over native AutoModel/AutoTrainer
+│       └── cpp/
+│           ├── CMakeLists.txt           # Builds JNI + links MF C++ core
+│           └── mobile_finetuner_jni.cpp # Thin JNI bridge
+├── sdk-sample/                           # Minimal consumer app for SDK smoke
 ├── app/
 │   └── src/main/java/com/mobilefinetuner/visualizer/
 │       ├── MainActivity.kt               # Entry point and app shell
@@ -234,8 +267,7 @@ android-visualizer/
 │   └── screenshots/                     # UI screenshots for README
 ├── scripts/
 │   └── qa/                              # One-click device QA script
-└── verification/
-    └── device_qa_release_latest/        # Reference screenshots + QA report
+└── README.md
 ```
 
 ---
@@ -258,7 +290,7 @@ Run a full on-device acceptance pass (build, install, auto tab switching, video 
 
 ```bash
 ./scripts/qa/mobile_device_qa.sh \
-  --out-dir verification/device_qa_release_latest \
+  --out-dir /tmp/mobilefinetuner-device-qa \
   --video-seconds 36 \
   --shot-interval 4
 ```
@@ -279,12 +311,14 @@ report records the pushed source and device path.
 
 Outputs:
 
-- `verification/device_qa_release_latest/QA_REPORT.txt`
+- `QA_REPORT.txt`
 - Full-tab screenshots (`Home`, `Train`, `Versus`, `Logs`, `Runs`)
 - Focus-state screenshots (filter input, step focus, chart interactions)
 - One MP4 session recording
 
 Use this before every release tag to keep acceptance artifacts reproducible.
+Generated QA media should stay in a local or CI artifact directory, not in the
+source tree.
 
 ---
 
