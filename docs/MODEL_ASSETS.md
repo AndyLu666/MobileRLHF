@@ -39,7 +39,7 @@ Use one shared model root:
     model.safetensors                 # or model.safetensors.index.json + shards
     tokenizer.json
     tokenizer.model
-  Qwen2.5-0.5B/
+  Qwen3-0.6B/
     config.json
     model.safetensors                 # or model.safetensors.index.json + shards
     tokenizer.json
@@ -73,7 +73,7 @@ export GPT2_SMALL_MODEL_DIR=/path/to/gpt2
 export GPT2_MEDIUM_MODEL_DIR=/path/to/gpt2-medium
 export GEMMA_270M_MODEL_DIR=/path/to/gemma-3-270m
 export GEMMA_1B_PT_MODEL_DIR=/path/to/gemma-3-1b-pt
-export QWEN_MODEL_DIR=/path/to/Qwen2.5-0.5B
+export QWEN_MODEL_DIR=/path/to/Qwen3-0.6B
 ```
 
 For backwards-compatible local experiments, each model example also checks its
@@ -101,8 +101,8 @@ huggingface-cli download gpt2-medium \
   --local-dir "$MFT_MODEL_ROOT/gpt2-medium" \
   --local-dir-use-symlinks False
 
-huggingface-cli download Qwen/Qwen2.5-0.5B \
-  --local-dir "$MFT_MODEL_ROOT/Qwen2.5-0.5B" \
+huggingface-cli download Qwen/Qwen3-0.6B \
+  --local-dir "$MFT_MODEL_ROOT/Qwen3-0.6B" \
   --local-dir-use-symlinks False
 ```
 
@@ -203,7 +203,7 @@ The reusable C++ library does not download assets. Applications must pass asset
 paths explicitly. The common patterns are:
 
 ```bash
-QWEN_MODEL_DIR=/path/to/Qwen2.5-0.5B \
+QWEN_MODEL_DIR=/path/to/Qwen3-0.6B \
 QWEN_DATA_DIR=/path/to/wikitext-2-raw \
 ./examples/qwen_lora_finetune/run_wikitext.sh
 ```

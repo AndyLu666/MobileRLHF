@@ -1,6 +1,6 @@
 /**
  * @file qwen_model.h
- * @brief Minimal Qwen2.5-0.5B C++ implementation (RMSNorm + RoPE + GQA + SwiGLU)
+ * @brief Minimal Qwen/Qwen3 C++ implementation (RMSNorm + RoPE + GQA + SwiGLU)
  *
  * Goal: CPU + BLAS training/alignment, supports attention-only LoRA (q/k/v/o).
  */
@@ -23,6 +23,7 @@ struct QwenConfig {
     int num_hidden_layers = 24;
     int num_attention_heads = 14;
     int num_key_value_heads = 2;
+    int head_dim = 64;
     int max_position_embeddings = 32768;
     float rms_norm_eps = 1e-6f;
     float rope_theta = 1000000.0f;

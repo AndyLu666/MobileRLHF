@@ -104,6 +104,16 @@ public final class MobileFineTuner implements AutoCloseable {
         return nativeTrainableTensorCount(requireOpen());
     }
 
+    public String generate(String prompt, int maxNewTokens) {
+        if (prompt == null || prompt.isEmpty()) {
+            throw new IllegalArgumentException("prompt must not be empty");
+        }
+        if (maxNewTokens <= 0) {
+            throw new IllegalArgumentException("maxNewTokens must be positive");
+        }
+        return nativeGenerate(requireOpen(), prompt, maxNewTokens);
+    }
+
     @Override
     public void close() {
         long handle = nativeHandle;
@@ -166,6 +176,7 @@ public final class MobileFineTuner implements AutoCloseable {
             int sequenceLength
     );
     private static native int nativeTrainableTensorCount(long handle);
+    private static native String nativeGenerate(long handle, String prompt, int maxNewTokens);
     private static native void nativeClose(long handle);
 
     public static final class LoraConfig {

@@ -153,12 +153,12 @@ public:
 };
 
 /**
- * @brief Qwen2.5 HuggingFace → internal key mapping generator
+ * @brief Qwen HuggingFace → internal key mapping generator
  */
 class QwenKeyMapper {
 public:
     /**
-     * @brief Generate Qwen2.5 mapping
+     * @brief Generate Qwen mapping
      * @param num_layers number of layers (e.g., 24)
      * @return {"internal_key": "hf_key"}
      */

@@ -51,8 +51,8 @@ fs::path make_case_dir(const std::string& name) {
 
 void test_config_inference() {
     const fs::path qwen = make_case_dir("qwen");
-    write_file(qwen / "config.json", R"({"model_type":"qwen2","vocab_size":151936})");
-    require(ops::TokenizerFactory::infer_model_type(qwen.string()) == "qwen2",
+    write_file(qwen / "config.json", R"({"model_type":"qwen3","vocab_size":151936})");
+    require(ops::TokenizerFactory::infer_model_type(qwen.string()) == "qwen3",
             "qwen model_type inference failed");
 
     const fs::path gemma = make_case_dir("gemma");
@@ -117,11 +117,11 @@ void write_minimal_gpt2_assets(const fs::path& root) {
 }
 
 void write_minimal_qwen_assets(const fs::path& root) {
-    write_file(root / "config.json", R"({"model_type":"qwen2","vocab_size":11})");
+    write_file(root / "config.json", R"({"model_type":"qwen3","vocab_size":11,"bos_token_id":9,"eos_token_id":10,"pad_token_id":9})");
     write_file(root / "vocab.json", R"({"Hello":0})");
     write_file(root / "merges.txt", "#version: 0.2\n");
     write_file(root / "tokenizer.json",
-               R"({"added_tokens":[{"id":10,"content":"<|endoftext|>","special":true}]})");
+               R"({"added_tokens":[{"id":9,"content":"<|endoftext|>","special":true},{"id":10,"content":"<|im_end|>","special":true}]})");
 }
 
 void write_minimal_gemma_assets(const fs::path& root) {
@@ -152,7 +152,8 @@ void test_factory_loads_minimal_real_assets() {
         auto tokenizer = ops::TokenizerFactory::from_pretrained(root.string());
         require_eq(tokenizer->get_vocab_size(), 11, "qwen vocab size mismatch");
         require_eq(tokenizer->get_eos_token(), 10, "qwen eos mismatch");
-        require_eq(tokenizer->get_pad_token(), 10, "qwen pad mismatch");
+        require_eq(tokenizer->get_bos_token(), 9, "qwen bos mismatch");
+        require_eq(tokenizer->get_pad_token(), 9, "qwen pad mismatch");
 
         const auto ids = tokenizer->encode("Hello");
         require_eq(static_cast<int>(ids.size()), 1, "qwen encode length mismatch");
@@ -162,7 +163,7 @@ void test_factory_loads_minimal_real_assets() {
         const auto encoded = tokenizer->encode_with_attention("Hello", 3);
         require_eq(static_cast<int>(encoded.input_ids.size()), 3, "qwen padded id length mismatch");
         require_eq(encoded.input_ids[0], 0, "qwen padded first token mismatch");
-        require_eq(encoded.input_ids[1], 10, "qwen padded pad token mismatch");
+        require_eq(encoded.input_ids[1], 9, "qwen padded pad token mismatch");
         require_eq(encoded.attention_mask[0], 1, "qwen first mask mismatch");
         require_eq(encoded.attention_mask[1], 0, "qwen pad mask mismatch");
     }

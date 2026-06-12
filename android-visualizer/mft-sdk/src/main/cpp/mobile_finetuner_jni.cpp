@@ -15,8 +15,10 @@
 namespace {
 
 struct NativeSession {
+    std::string model_dir;
     std::unique_ptr<ops::AutoModelForCausalLM> model;
     std::unique_ptr<ops::AutoTrainer> trainer;
+    std::unique_ptr<ops::Tokenizer> tokenizer;
 };
 
 void throw_java(JNIEnv* env, const char* class_name, const std::string& message) {
@@ -140,6 +142,51 @@ jdoubleArray make_double_array(JNIEnv* env, const jdouble* values, jsize count) 
     return out;
 }
 
+std::shared_ptr<ops::Tensor> make_input_ids(const std::vector<int>& ids) {
+    std::vector<int32_t> values(ids.begin(), ids.end());
+    return std::make_shared<ops::Tensor>(
+        std::vector<int64_t>{1, static_cast<int64_t>(values.size())},
+        values.data(),
+        ops::kInt32,
+        ops::kCPU);
+}
+
+std::shared_ptr<ops::Tensor> make_attention_mask(size_t length) {
+    std::vector<float> values(length, 1.0f);
+    return std::make_shared<ops::Tensor>(
+        std::vector<int64_t>{1, static_cast<int64_t>(values.size())},
+        values.data(),
+        ops::kFloat32,
+        ops::kCPU);
+}
+
+int argmax_last_token(const ops::TensorPtr& logits) {
+    if (!logits || logits->ndim() != 3) {
+        throw std::runtime_error("Expected logits with shape [batch, seq, vocab]");
+    }
+    if (logits->size(0) != 1) {
+        throw std::runtime_error("Generation currently supports batch size 1 only");
+    }
+    const int64_t seq_len = logits->size(1);
+    const int64_t vocab = logits->size(2);
+    if (seq_len <= 0 || vocab <= 0) {
+        throw std::runtime_error("Invalid logits shape");
+    }
+
+    const float* data = logits->data<float>();
+    const int64_t offset = (seq_len - 1) * vocab;
+    int best_id = 0;
+    float best = data[offset];
+    for (int64_t i = 1; i < vocab; ++i) {
+        const float value = data[offset + i];
+        if (value > best) {
+            best = value;
+            best_id = static_cast<int>(i);
+        }
+    }
+    return best_id;
+}
+
 void fill_parameters(ops::AutoModelForCausalLM& model, float value) {
     for (const auto& param : model.parameters()) {
         if (!param || param->dtype() != ops::kFloat32) {
@@ -243,6 +290,7 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreate(
         options.verbose = false;
 
         auto session = std::make_unique<NativeSession>();
+        session->model_dir = model_dir_string;
         session->model = ops::AutoModelForCausalLM::from_pretrained(model_dir_string, options);
         return reinterpret_cast<jlong>(session.release());
     }, static_cast<jlong>(0));
@@ -380,6 +428,61 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainableTensorCount(
         }
         return static_cast<jint>(session->model->trainable_parameters().size());
     }, static_cast<jint>(0));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeGenerate(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jstring prompt,
+        jint max_new_tokens) {
+    return guarded(env, [&]() -> jstring {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+        if (max_new_tokens <= 0) {
+            throw std::invalid_argument("maxNewTokens must be positive");
+        }
+
+        if (!session->tokenizer) {
+            session->tokenizer = ops::TokenizerFactory::from_pretrained(session->model_dir);
+        }
+        if (!session->tokenizer) {
+            throw std::runtime_error("Tokenizer is not initialized");
+        }
+
+        const std::string prompt_text = to_string(env, prompt);
+        if (prompt_text.empty()) {
+            throw std::invalid_argument("prompt must not be empty");
+        }
+
+        std::vector<int> tokens = session->tokenizer->encode(prompt_text);
+        if (tokens.empty()) {
+            throw std::runtime_error("Tokenizer produced no prompt tokens");
+        }
+        const size_t prompt_token_count = tokens.size();
+        const int eos = session->tokenizer->get_eos_token();
+
+        for (int step = 0; step < max_new_tokens; ++step) {
+            auto input_ids = make_input_ids(tokens);
+            auto attention_mask = make_attention_mask(tokens.size());
+            auto logits = session->model->forward(input_ids, attention_mask);
+            const int next_id = argmax_last_token(logits);
+            tokens.push_back(next_id);
+            if (eos >= 0 && next_id == eos) {
+                break;
+            }
+        }
+
+        std::vector<int> output_tokens(tokens.begin() + static_cast<long>(prompt_token_count), tokens.end());
+        const std::string completion = session->tokenizer->decode(output_tokens);
+        return env->NewStringUTF(completion.c_str());
+    }, static_cast<jstring>(nullptr));
 }
 
 extern "C" JNIEXPORT void JNICALL

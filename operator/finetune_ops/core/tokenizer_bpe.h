@@ -155,9 +155,9 @@ struct QwenTokenizerConfig {
     std::string tokenizer_json_path;   // parse added_tokens (incl. specials)
     std::string config_json_path;      // read vocab_size for embedding alignment
 
-    int eos_token_id = 151643;         // <|endoftext|>
-    int bos_token_id = -1;             // Qwen does not explicitly use BOS
-    int pad_token_id = 151643;         // same as HF: pad = eos
+    int eos_token_id = 151645;         // Qwen3 default <|im_end|>
+    int bos_token_id = 151643;         // Qwen3 default <|endoftext|>
+    int pad_token_id = 151643;         // Qwen3 HF default <|endoftext|>
     int unk_token_id = -1;             // HF does not define unk
 
     // If config vocab_size exceeds vocab count, override to match embedding size
@@ -174,7 +174,7 @@ struct QwenTokenizerConfig {
 };
 
 /**
- * @brief Qwen Byte-Level BPE Tokenizer (aligned with HuggingFace Qwen2Tokenizer)
+ * @brief Qwen Byte-Level BPE Tokenizer (aligned with HuggingFace Qwen tokenizer)
  *
  * Supports:
  * - Loading vocab/merges (byte-level BPE)
@@ -239,6 +239,7 @@ private:
     void load_vocab();
     void load_merges();
     void load_added_tokens();
+    void load_special_tokens_from_config();
     void load_vocab_size_override();
 
     std::string bytes_to_unicode(const std::string& text);

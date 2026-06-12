@@ -104,7 +104,7 @@ void test_gemma_auto_lora_dispatch() {
 void test_qwen_auto_lora_dispatch() {
     const fs::path root = make_case_dir("qwen");
     write_file(root / "config.json",
-               R"({"model_type":"qwen2","vocab_size":32,"hidden_size":8,"intermediate_size":16,"num_hidden_layers":1,"num_attention_heads":2,"num_key_value_heads":1,"max_position_embeddings":16})");
+               R"({"model_type":"qwen3","vocab_size":32,"hidden_size":8,"intermediate_size":16,"num_hidden_layers":1,"num_attention_heads":2,"num_key_value_heads":1,"max_position_embeddings":16})");
 
     auto model = ops::AutoModelForCausalLM::from_pretrained(root.string(), no_weight_load());
     require(model->family() == ops::ModelFamily::Qwen, "Qwen family dispatch failed");

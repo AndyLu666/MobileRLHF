@@ -86,7 +86,7 @@ target and avoids shipping unvalidated ABI variants.
 Push or download model assets into app-readable storage, for example:
 
 ```text
-/sdcard/Android/data/<your.app.id>/files/models/Qwen2.5-0.5B/
+/sdcard/Android/data/<your.app.id>/files/models/Qwen3-0.6B/
   config.json
   tokenizer.json / tokenizer.model / vocab files
   model.safetensors

@@ -1,6 +1,6 @@
 /**
  * @file qwen_model.cpp
- * @brief Minimal Qwen2.5-0.5B implementation (CPU/BLAS, attention-only LoRA)
+ * @brief Minimal Qwen/Qwen3 implementation (CPU/BLAS, attention-only LoRA)
  */
 
 #include "qwen_model.h"
@@ -67,6 +67,7 @@ QwenConfig QwenConfig::from_pretrained(const std::string& path) {
     cfg.num_hidden_layers = get_int("num_hidden_layers", cfg.num_hidden_layers);
     cfg.num_attention_heads = get_int("num_attention_heads", cfg.num_attention_heads);
     cfg.num_key_value_heads = get_int("num_key_value_heads", cfg.num_key_value_heads);
+    cfg.head_dim = get_int("head_dim", cfg.hidden_size / cfg.num_attention_heads);
     cfg.max_position_embeddings = get_int("max_position_embeddings", cfg.max_position_embeddings);
     cfg.bos_token_id = get_int("bos_token_id", cfg.bos_token_id);
     cfg.eos_token_id = get_int("eos_token_id", cfg.eos_token_id);
@@ -86,15 +87,16 @@ QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
         auto& b = layers_[i];
         b.input_norm_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size}, kFloat32, kCPU);
         b.post_norm_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size}, kFloat32, kCPU);
-        int64_t Hd = cfg.hidden_size / cfg.num_attention_heads;
+        int64_t Hd = cfg.head_dim;
+        int64_t attn_out = cfg.num_attention_heads * Hd;
         int64_t kv_out = cfg.num_key_value_heads * Hd;
-        b.q_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.hidden_size}, kFloat32, kCPU);
-        b.q_proj_bias = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size}, kFloat32, kCPU);
+        b.q_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, attn_out}, kFloat32, kCPU);
+        b.q_proj_bias = std::make_shared<Tensor>(std::vector<int64_t>{attn_out}, kFloat32, kCPU);
         b.k_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, kv_out}, kFloat32, kCPU);
         b.k_proj_bias = std::make_shared<Tensor>(std::vector<int64_t>{kv_out}, kFloat32, kCPU);
         b.v_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, kv_out}, kFloat32, kCPU);
         b.v_proj_bias = std::make_shared<Tensor>(std::vector<int64_t>{kv_out}, kFloat32, kCPU);
-        b.o_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.hidden_size}, kFloat32, kCPU);
+        b.o_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{attn_out, cfg.hidden_size}, kFloat32, kCPU);
         b.gate_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.intermediate_size}, kFloat32, kCPU);
         b.up_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.intermediate_size}, kFloat32, kCPU);
         b.down_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.intermediate_size, cfg.hidden_size}, kFloat32, kCPU);
@@ -159,11 +161,12 @@ void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]],
             return {A, B};
         };
         
-        int64_t Hd = config_.hidden_size / config_.num_attention_heads;
+        int64_t Hd = config_.head_dim;
+        int64_t attn_out = config_.num_attention_heads * Hd;
         int64_t kv_out = config_.num_key_value_heads * Hd;
         
         // Q and V always carry LoRA
-        auto [Aq, Bq] = make_AB(config_.hidden_size, config_.hidden_size);
+        auto [Aq, Bq] = make_AB(config_.hidden_size, attn_out);
         auto [Av, Bv] = make_AB(config_.hidden_size, kv_out);
         b.q_lin->attach_lora(Aq, Bq, scale);
         b.v_lin->attach_lora(Av, Bv, scale);
@@ -171,7 +174,7 @@ void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]],
         // K and O only carry LoRA when qv_only is false
         if (!qv_only) {
             auto [Ak, Bk] = make_AB(config_.hidden_size, kv_out);
-            auto [Ao, Bo] = make_AB(config_.hidden_size, config_.hidden_size);
+            auto [Ao, Bo] = make_AB(attn_out, config_.hidden_size);
             b.k_lin->attach_lora(Ak, Bk, scale);
             b.o_lin->attach_lora(Ao, Bo, scale);
         }
@@ -280,11 +283,10 @@ TensorPtr QwenModel::attention(const TensorPtr& x, QwenBlock& blk,
                                const TensorPtr& pad_mask, int64_t seq_len [[maybe_unused]]) {
     int64_t B = x->shape()[0];
     int64_t S = x->shape()[1];
-    int64_t C = x->shape()[2];
     int64_t H = config_.num_attention_heads;
     int64_t HKV = config_.num_key_value_heads;
-    int64_t Hd = C / H;
-    // int64_t kv_out = HKV * Hd;
+    int64_t Hd = config_.head_dim;
+    int64_t attn_out_dim = H * Hd;
 
     auto q = blk.lora_initialized && blk.q_lin ? blk.q_lin->forward(x) : add(matmul(x, blk.q_proj_weight), blk.q_proj_bias);
     auto k = blk.lora_initialized && blk.k_lin ? blk.k_lin->forward(x) : add(matmul(x, blk.k_proj_weight), blk.k_proj_bias);
@@ -317,7 +319,7 @@ TensorPtr QwenModel::attention(const TensorPtr& x, QwenBlock& blk,
     auto probs = softmax(scores, -1);
     auto ctx = matmul(probs, v);  // [B,H,S,Hd]
     ctx = permute(ctx, {0, 2, 1, 3});
-    ctx = reshape(ctx, {B, S, C});
+    ctx = reshape(ctx, {B, S, attn_out_dim});
 
     auto out = blk.lora_initialized && blk.o_lin ? blk.o_lin->forward(ctx) : matmul(ctx, blk.o_proj_weight);
     return out;

@@ -122,7 +122,7 @@ def resolve_model_dir(model_key: str, local_dir: str | Path) -> str:
         ),
         "qwen": (
             ["config.json", "tokenizer.json", "vocab.json", "merges.txt"],
-            root_candidates("Qwen2.5-0.5B", "Qwen3-0.6B", "qwen2.5-0.5b", "qwen") + [local],
+            root_candidates("Qwen3-0.6B", "qwen3-0.6b", "qwen") + [local],
         ),
     }
     if model_key not in model_map:

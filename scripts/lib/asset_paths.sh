@@ -142,7 +142,7 @@ $local_dir
 EOF
       ;;
     qwen)
-      mf_emit_model_root_candidates Qwen2.5-0.5B Qwen3-0.6B qwen2.5-0.5b qwen
+      mf_emit_model_root_candidates Qwen3-0.6B qwen3-0.6b qwen
       cat <<EOF
 $local_dir
 EOF

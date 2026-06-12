@@ -149,6 +149,28 @@ namespace simple_json {
         }
         return -1;
     }
+
+    static int parse_json_int(const std::string& filepath, const std::string& key, int fallback) {
+        std::ifstream f(filepath);
+        if (!f.is_open()) {
+            return fallback;
+        }
+
+        std::stringstream buffer;
+        buffer << f.rdbuf();
+        std::string content = buffer.str();
+
+        std::regex pattern("\"" + key + "\"\\s*:\\s*(-?\\d+)");
+        std::smatch m;
+        if (std::regex_search(content, m, pattern)) {
+            try {
+                return std::stoi(m[1].str());
+            } catch (...) {
+                return fallback;
+            }
+        }
+        return fallback;
+    }
 }
 
 namespace {
@@ -862,8 +884,10 @@ void QwenBPETokenizer::load_added_tokens() {
             id_to_added_[t.id] = t.content;
             added_special_flags_[t.content] = t.special;
             if (t.content == "<|endoftext|>") {
-                eos_token_id_ = t.id;
+                bos_token_id_ = t.id;
                 pad_token_id_ = t.id;
+            } else if (t.content == "<|im_end|>") {
+                eos_token_id_ = t.id;
             }
         }
     } catch (const std::exception& e) {
@@ -886,6 +910,23 @@ void QwenBPETokenizer::load_added_tokens() {
     }
 }
 
+void QwenBPETokenizer::load_special_tokens_from_config() {
+    if (config_.config_json_path.empty()) {
+        return;
+    }
+
+    const int eos = simple_json::parse_json_int(config_.config_json_path, "eos_token_id", eos_token_id_);
+    const int bos = simple_json::parse_json_int(config_.config_json_path, "bos_token_id", bos_token_id_);
+    const int pad = simple_json::parse_json_int(config_.config_json_path, "pad_token_id", pad_token_id_);
+    if (eos >= 0) eos_token_id_ = eos;
+    if (bos >= 0) bos_token_id_ = bos;
+    if (pad >= 0) pad_token_id_ = pad;
+
+    if (pad_token_id_ < 0 && eos_token_id_ >= 0) {
+        pad_token_id_ = eos_token_id_;
+    }
+}
+
 void QwenBPETokenizer::load_vocab_size_override() {
     int override_val = config_.vocab_size_override;
     if (override_val <= 0 && !config_.config_json_path.empty()) {
@@ -900,6 +941,7 @@ void QwenBPETokenizer::load() {
     load_vocab();
     load_merges();
     load_added_tokens();
+    load_special_tokens_from_config();
     load_vocab_size_override();
 }
 

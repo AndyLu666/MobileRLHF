@@ -21,9 +21,9 @@ MODEL_SPECS = {
         "add_special_tokens": False,
     },
     "qwen": {
-        "model_type": "qwen2",
+        "model_type": "qwen3",
         "env": ["QWEN_MODEL_DIR"],
-        "root_names": ["Qwen2.5-0.5B", "Qwen3-0.6B", "qwen2.5-0.5b", "qwen"],
+        "root_names": ["Qwen3-0.6B", "qwen3-0.6b", "qwen"],
         "local": REPO_ROOT / "examples/qwen_lora_finetune/pretrained",
         "required": ["config.json", "tokenizer.json", "vocab.json", "merges.txt"],
         "add_special_tokens": False,

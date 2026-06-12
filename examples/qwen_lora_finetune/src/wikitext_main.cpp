@@ -20,7 +20,7 @@
 using namespace ops;
 
 struct Args {
-    std::string model_dir = "Qwen2.5-0.5B";
+    std::string model_dir = "Qwen3-0.6B";
     std::string data_dir = "data/wikitext2/wikitext-2-raw";
     std::string jsonl_train;
     std::string jsonl_valid;
@@ -295,7 +295,7 @@ int main(int argc, char** argv) {
         }
         metrics << "step,loss,step_time_s,elapsed_s\n";
 
-        std::cout << "\n========== Qwen2.5-0.5B LoRA Finetune ("
+        std::cout << "\n========== Qwen3-0.6B LoRA Finetune ("
                   << (use_jsonl ? "masked JSONL" : "WikiText-2")
                   << ", C++) ==========\n";
         // 1) tokenizer

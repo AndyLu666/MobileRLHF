@@ -33,7 +33,7 @@ fs::path make_case_dir(const std::string& name) {
 void test_qwen_registry() {
     const fs::path root = make_case_dir("qwen");
     write_file(root / "config.json",
-               R"({"model_type":"qwen2","tie_word_embeddings":false})");
+               R"({"model_type":"qwen3","tie_word_embeddings":false})");
     write_file(root / "tokenizer.json", "{}");
     write_file(root / "vocab.json", "{}");
     write_file(root / "merges.txt", "#version: 0.2\n");
@@ -41,7 +41,7 @@ void test_qwen_registry() {
 
     const auto spec = ops::ModelRegistry::inspect_pretrained(root.string());
     require(spec.family == ops::ModelFamily::Qwen, "qwen family inference failed");
-    require(spec.model_type == "qwen2", "qwen model_type mismatch");
+    require(spec.model_type == "qwen3", "qwen model_type mismatch");
     require(!spec.tie_word_embeddings, "qwen tie_word_embeddings should be false");
     require(spec.assets.has_tokenizer_json, "qwen tokenizer.json not detected");
     require(spec.assets.has_vocab_json, "qwen vocab.json not detected");

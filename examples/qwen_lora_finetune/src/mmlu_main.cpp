@@ -48,7 +48,7 @@ static double get_rss_mb() {
 using namespace ops;
 
 struct Args {
-    std::string model_dir = "Qwen2.5-0.5B";
+    std::string model_dir = "Qwen3-0.6B";
     std::string data_dir = "data/mmlu/data";
     int seq_len = 128;
     int batch_size = 8;

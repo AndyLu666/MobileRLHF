@@ -162,7 +162,7 @@ $MFT_MODEL_ROOT/
   gpt2-medium/
   gemma-3-270m/
   gemma-3-1b-pt/
-  Qwen2.5-0.5B/
+  Qwen3-0.6B/
 
 $MFT_DATA_ROOT/
   wikitext2/wikitext-2-raw/
@@ -263,7 +263,7 @@ alignment debugging and model-specific experiment runners.
     TRAIN_MODE=wt2 STEPS=200 BATCH_SIZE=2 GRAD_ACCUM_STEPS=2 ./run_train.sh
   )
   ```
-- **Qwen2.5-0.5B:**
+- **Qwen3-0.6B:**
   ```bash
   (
     cd examples/qwen_lora_finetune &&
@@ -301,7 +301,7 @@ GPT-2 and Gemma consume masked JSONL prepared by `run_prepare_data.sh`. Qwen con
     TRAIN_MODE=mmlu STEPS=200 ./run_train.sh
   )
   ```
-- **Qwen2.5-0.5B:**
+- **Qwen3-0.6B:**
   ```bash
   (
     cd examples/qwen_lora_finetune &&
@@ -360,7 +360,7 @@ Detailed layout and download examples are documented in
 ### 1. Python 单测
 
 ### Qwen Family (Alibaba)
-- **Qwen2.5-0.5B**: Lightweight decoder-only transformer with rotary embeddings and QKV sharing
+- **Qwen3-0.6B**: Lightweight decoder-only transformer with rotary embeddings and QKV sharing
 
 ### Adding New Models
 
@@ -583,7 +583,7 @@ MobileFineTuner/
 │   ├── gpt2_medium_lora_finetune/      # GPT-2 Medium LoRA
 │   ├── gemma_3_270m_lora_finetune/     # Gemma 270M LoRA
 │   ├── gemma_3_1b_pt_lora_finetune/    # Gemma 1B-PT LoRA
-│   └── qwen_lora_finetune/             # Qwen2.5-0.5B LoRA
+│   └── qwen_lora_finetune/             # Qwen3-0.6B LoRA
 ├── scripts/                            # Automation and orchestration
 │   ├── android/                        # Native Android build/run helpers
 │   ├── lib/                            # Shared shell helpers
@@ -659,7 +659,7 @@ cd android-visualizer
 - GPT-2 Small / Medium
 - Gemma 3 270M
 - Gemma 3 1B-PT
-- Qwen2.5-0.5B
+- Qwen3-0.6B
 
 ## 引用
 

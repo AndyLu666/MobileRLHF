@@ -434,7 +434,7 @@ std::string TokenizerFactory::infer_model_type(const std::string& model_dir) {
         const std::string config = read_file(config_path);
         const std::string model_type = lowercase(extract_json_string(config, "model_type"));
         if (model_type.find("qwen") != std::string::npos) {
-            return "qwen2";
+            return model_type;
         }
         if (model_type.find("gemma") != std::string::npos) {
             return "gemma";
