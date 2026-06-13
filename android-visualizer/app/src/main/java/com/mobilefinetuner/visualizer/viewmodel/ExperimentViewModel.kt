@@ -15,6 +15,7 @@ import com.mobilefinetuner.visualizer.model.DashboardUiState
 import com.mobilefinetuner.visualizer.model.EventType
 import com.mobilefinetuner.visualizer.model.FeedbackPrompt
 import com.mobilefinetuner.visualizer.model.FeedbackSessionState
+import com.mobilefinetuner.visualizer.model.InferenceRecord
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
@@ -527,6 +528,12 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 val ndjson = children.firstOrNull {
                     it.isFile && (it.name == "metrics.ndjson" || it.name == "metrics.jsonl")
                 }
+                val generated = children.firstOrNull {
+                    it.isFile && it.name == "generated_responses.jsonl"
+                }
+                val feedback = children.firstOrNull {
+                    it.isFile && it.name == "inference_feedback.jsonl"
+                }
                 val runName = if (relPath.isBlank()) {
                     dir.name ?: "run"
                 } else {
@@ -535,7 +542,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 val lastModified = listOfNotNull(
                     train.lastModified(),
                     rss?.lastModified(),
-                    ndjson?.lastModified()
+                    ndjson?.lastModified(),
+                    generated?.lastModified(),
+                    feedback?.lastModified()
                 ).maxOrNull() ?: 0L
 
                 runs += RunHandle(
@@ -545,6 +554,8 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     trainLogUri = train.uri,
                     rssCsvUri = rss?.uri,
                     metricsNdjsonUri = ndjson?.uri,
+                    generatedResponsesUri = generated?.uri,
+                    inferenceFeedbackUri = feedback?.uri,
                     lastModifiedMs = lastModified
                 )
             }
@@ -577,6 +588,15 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             ?: emptyList()
 
         val mergedMetrics = mergeMetrics(parsedLog.metrics, ndjsonMetrics)
+        val generatedRecords = run.generatedResponsesUri
+            ?.let { readLastLines(it, MAX_INFERENCE_LINES) }
+            ?.let { TrainingLogParser.parseGeneratedResponsesJsonl(it) }
+            ?: emptyList()
+        val feedbackRecords = run.inferenceFeedbackUri
+            ?.let { readLastLines(it, MAX_INFERENCE_LINES) }
+            ?.let { TrainingLogParser.parseInferenceFeedbackJsonl(it) }
+            ?: emptyList()
+        val inferenceRecords = mergeInferenceRecords(generatedRecords, feedbackRecords)
 
         RunSnapshot(
             runId = run.id,
@@ -589,10 +609,33 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             metrics = mergedMetrics,
             rssPoints = rssPoints,
             events = parsedLog.events.takeLast(MAX_EVENT_LINES),
+            inferenceRecords = inferenceRecords,
             logTail = logLines.takeLast(MAX_LOG_TAIL_LINES),
             summary = parsedLog.summary,
             updatedAtMs = System.currentTimeMillis()
         )
+    }
+
+    private fun mergeInferenceRecords(
+        generated: List<InferenceRecord>,
+        feedback: List<InferenceRecord>
+    ): List<InferenceRecord> {
+        if (feedback.isEmpty()) return generated
+        if (generated.isEmpty()) return feedback
+
+        val generatedByKey = generated.associateBy { inferenceKey(it) }
+        return feedback.map { item ->
+            val source = generatedByKey[inferenceKey(item)]
+            item.copy(
+                completion = source?.completion ?: item.completion,
+                elapsedMs = source?.elapsedMs ?: item.elapsedMs,
+                source = item.source ?: source?.source
+            )
+        }
+    }
+
+    private fun inferenceKey(record: InferenceRecord): String {
+        return record.promptId?.takeIf { it.isNotBlank() } ?: record.prompt
     }
 
     private fun mergeMetrics(logMetrics: List<StepMetric>, ndjsonMetrics: List<StepMetric>): List<StepMetric> {
@@ -817,6 +860,8 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         val trainLog = File(runDir, "train.log")
         val metrics = File(runDir, "metrics.ndjson")
         val eval = File(runDir, "eval_metrics.jsonl")
+        val generated = File(runDir, "generated_responses.jsonl")
+        val feedback = File(runDir, "inference_feedback.jsonl")
         return RunHandle(
             id = Uri.fromFile(runDir).toString(),
             name = "native/$runName",
@@ -824,7 +869,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             trainLogUri = Uri.fromFile(trainLog),
             rssCsvUri = null,
             metricsNdjsonUri = Uri.fromFile(metrics.takeIf { it.exists() } ?: metrics),
-            lastModifiedMs = listOf(trainLog, metrics, eval)
+            generatedResponsesUri = generated.takeIf { it.exists() }?.let { Uri.fromFile(it) },
+            inferenceFeedbackUri = feedback.takeIf { it.exists() }?.let { Uri.fromFile(it) },
+            lastModifiedMs = listOf(trainLog, metrics, eval, generated, feedback)
                 .filter { it.exists() }
                 .maxOfOrNull { it.lastModified() }
                 ?: System.currentTimeMillis()
@@ -888,6 +935,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         private const val MAX_LOG_TAIL_LINES = 1000
         private const val MAX_RSS_LINES = 12000
         private const val MAX_NDJSON_LINES = 20000
+        private const val MAX_INFERENCE_LINES = 200
         private const val MAX_EVENT_LINES = 500
 
         private const val POLL_FAST_MS = 1500L

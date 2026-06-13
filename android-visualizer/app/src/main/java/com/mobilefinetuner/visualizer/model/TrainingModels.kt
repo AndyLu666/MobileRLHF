@@ -67,6 +67,16 @@ data class RunSummary(
     val totalSteps: Int? = null
 )
 
+data class InferenceRecord(
+    val promptId: String? = null,
+    val prompt: String,
+    val completion: String? = null,
+    val chosen: String? = null,
+    val rejected: String? = null,
+    val elapsedMs: Double? = null,
+    val source: String? = null
+)
+
 data class RunSnapshot(
     val runId: String,
     val runName: String,
@@ -74,6 +84,7 @@ data class RunSnapshot(
     val metrics: List<StepMetric>,
     val rssPoints: List<RssPoint>,
     val events: List<RunEvent>,
+    val inferenceRecords: List<InferenceRecord> = emptyList(),
     val logTail: List<String>,
     val summary: RunSummary,
     val updatedAtMs: Long
@@ -86,6 +97,8 @@ data class RunHandle(
     val trainLogUri: Uri,
     val rssCsvUri: Uri? = null,
     val metricsNdjsonUri: Uri? = null,
+    val generatedResponsesUri: Uri? = null,
+    val inferenceFeedbackUri: Uri? = null,
     val lastModifiedMs: Long
 )
 

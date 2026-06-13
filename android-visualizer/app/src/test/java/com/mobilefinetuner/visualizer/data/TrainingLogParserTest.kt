@@ -138,6 +138,42 @@ class TrainingLogParserTest {
     }
 
     @Test
+    fun parseInferenceSimCompleteMarker_returnsCompletedStatus() {
+        val lines = listOf(
+            "[Init] Qwen3 HFRL inference simulation",
+            "[DPO] step=1/2 | loss=0.6300 | reward_acc=0.6600 | reward_margin=0.2400",
+            "[Complete] inference_feedback_jsonl=runs/qwen3_hfrl_infer_sim/inference_feedback.jsonl"
+        )
+
+        val parsed = TrainingLogParser.parseTrainLog(lines)
+
+        assertThat(parsed.status).isEqualTo(RunStatus.COMPLETED)
+    }
+
+    @Test
+    fun parseInferenceJsonl_extractsGeneratedAndFeedbackRecords() {
+        val generated = TrainingLogParser.parseGeneratedResponsesJsonl(
+            listOf(
+                "{\"prompt_id\":\"travel_fitness\",\"prompt\":\"How can I maintain fitness?\",\"completion\":\"Use hotel gyms\\nand walk.\",\"chosen\":\"Use hotel gyms and walk.\",\"elapsed_ms\":45296.1,\"source\":\"qwen3_native_inference\"}"
+            )
+        )
+        val feedback = TrainingLogParser.parseInferenceFeedbackJsonl(
+            listOf(
+                "{\"prompt\":\"How can I maintain fitness?\",\"chosen\":\"Use hotel gyms and walk.\",\"rejected\":\"Ignore sleep.\",\"source\":\"qwen3_native_inference_sim\",\"prompt_id\":\"travel_fitness\"}"
+            )
+        )
+
+        assertThat(generated).hasSize(1)
+        assertThat(generated.single().promptId).isEqualTo("travel_fitness")
+        assertThat(generated.single().completion).isEqualTo("Use hotel gyms\nand walk.")
+        assertThat(generated.single().elapsedMs).isWithin(1e-6).of(45296.1)
+
+        assertThat(feedback).hasSize(1)
+        assertThat(feedback.single().chosen).isEqualTo("Use hotel gyms and walk.")
+        assertThat(feedback.single().rejected).isEqualTo("Ignore sleep.")
+    }
+
+    @Test
     fun parseRealGpt2Log_sampleFileMatchesExpectedTailStep() {
         val lines = readResourceLines("samples/gpt2_train.log")
         val parsed = TrainingLogParser.parseTrainLog(lines)

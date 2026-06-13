@@ -10,22 +10,27 @@ Build the missing generation-inference step for the HFRL loop. For now, ignore c
 - Android visualizer can launch a native DPO demo and show training/eval metrics.
 - LoRA adapters are saved after training.
 - The merged upstream adds `mft-sdk` with `open`, `initLora`, `createTrainer`, `trainStep`, and `selfTest`.
-- Qwen model/tokenizer support exists in `operator` and `examples/qwen_lora_finetune`.
+- Qwen3-0.6B model/tokenizer support exists in `operator` and `examples/qwen_lora_finetune`.
+- Native C++ single-prompt Qwen3 generation exists through `infer_qwen`.
+- JNI/SDK exposes a basic greedy `generate(prompt, maxNewTokens)` API.
+- Desktop C++ HFRL inference simulation exists through `hfrl_infer_sim`.
+- Android visualizer can read and display generated inference artifacts from a run folder.
 
 ## Gap
 
 The system does not yet expose generation inference:
 
-- no native `generate(prompt)` loop,
-- no Java/Kotlin `generate` SDK method,
 - no Android UI to enter a prompt and display generated text,
 - no post-training adapter loading path for inference.
+- no real callback/upload path for inference-generated preference pairs.
 
 ## Issues
 
 ### Issue 1: Native Qwen generation CLI
 
 Implement a minimal native CLI that loads Qwen model/tokenizer, accepts a prompt, runs greedy token generation, decodes output, and prints the response. This proves the core inference path before UI/JNI.
+
+Status: done for Qwen3-0.6B base-model greedy generation.
 
 Acceptance:
 
@@ -38,6 +43,8 @@ Acceptance:
 
 Expose generation through `mft-sdk`.
 
+Status: done for a basic greedy `generate(prompt, maxNewTokens)` API.
+
 Acceptance:
 
 - Java API: `String generate(String prompt, int maxNewTokens, float temperature)` or a simple greedy variant first.
@@ -47,6 +54,10 @@ Acceptance:
 ### Issue 3: Android Inference Panel
 
 Add a visualizer UI panel for prompt input and generated response.
+
+Status: partially done. The app can display run-folder inference artifacts
+(`generated_responses.jsonl` and `inference_feedback.jsonl`), but it does not yet
+provide an in-app prompt box that launches Qwen3 generation on the phone.
 
 Acceptance:
 
@@ -73,3 +84,22 @@ Acceptance:
 - User picks one.
 - App writes `prompt/chosen/rejected` JSONL.
 - DPO training consumes the generated feedback data.
+
+### Issue 6: Desktop HFRL Inference Simulation
+
+Before updating Android UI, run a computer-side HFRL simulation that proves the
+new inference stage can feed the existing run-folder/visualizer contract.
+
+Status: implemented for base Qwen3 inference plus simulated telemetry.
+
+Acceptance:
+
+- Build target exists under `examples/qwen_lora_finetune`: `hfrl_infer_sim`.
+- Runner exists: `examples/qwen_lora_finetune/run_hfrl_infer_sim.sh`.
+- Run folder contains `generated_responses.jsonl`, `inference_feedback.jsonl`,
+  `train.log`, `metrics.ndjson`, `SUMMARY.md`, and `SUMMARY.json`.
+- `inference_feedback.jsonl` uses DPO-compatible `prompt/chosen/rejected` rows.
+- `metrics.ndjson` contains Android-readable `loss`, `reward_accuracy`,
+  `reward_margin`, `chosen_reward`, `rejected_reward`, `grad_norm`, and `rss_mb`.
+- Android Overview displays parsed inference feedback records when the run folder
+  contains `generated_responses.jsonl` or `inference_feedback.jsonl`.

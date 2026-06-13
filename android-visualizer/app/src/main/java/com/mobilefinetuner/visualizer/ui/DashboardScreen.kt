@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import com.mobilefinetuner.visualizer.model.DashboardTab
 import com.mobilefinetuner.visualizer.model.EventType
 import com.mobilefinetuner.visualizer.model.FeedbackSessionState
+import com.mobilefinetuner.visualizer.model.InferenceRecord
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
@@ -874,6 +875,12 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
             }
         }
 
+        if (snapshot.inferenceRecords.isNotEmpty()) {
+            item {
+                InferenceFeedbackPanel(records = snapshot.inferenceRecords)
+            }
+        }
+
         item {
             MemoryWaterfallChart(
                 modifier = Modifier.fillMaxWidth(),
@@ -887,6 +894,119 @@ private fun OverviewTab(snapshot: RunSnapshot?) {
         }
     }
     } // end Box
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun InferenceFeedbackPanel(records: List<InferenceRecord>) {
+    val avgLatencyMs = records.mapNotNull { it.elapsedMs }.takeIf { it.isNotEmpty() }?.average()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), RoundedCornerShape(18.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.16f), RoundedCornerShape(18.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Inference Feedback", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "Qwen3 generation converted into DPO preference pairs.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = "${records.size} pairs",
+                style = MaterialTheme.typography.labelLarge,
+                color = RssColor,
+                modifier = Modifier
+                    .background(RssColor.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+            )
+        }
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            maxItemsInEachRow = 3
+        ) {
+            MiniMetricChip(
+                label = "Pairs",
+                value = records.size.toString(),
+                accent = NeonBlue,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "Avg Infer",
+                value = avgLatencyMs?.let { "${format1(it / 1000.0)}s" } ?: "N/A",
+                accent = NeonAmber,
+                modifier = Modifier.weight(1f)
+            )
+            MiniMetricChip(
+                label = "Source",
+                value = records.firstOrNull()?.source?.take(18) ?: "N/A",
+                accent = NeonGreen,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        records.take(4).forEachIndexed { index, record ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f), RoundedCornerShape(14.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Prompt ${index + 1}: ${record.prompt}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+                record.completion?.takeIf { it.isNotBlank() }?.let {
+                    LabeledTextBlock(label = "Generated", value = it, accent = NeonBlue)
+                }
+                record.chosen?.takeIf { it.isNotBlank() }?.let {
+                    LabeledTextBlock(label = "Chosen", value = it, accent = NeonGreen)
+                }
+                record.rejected?.takeIf { it.isNotBlank() }?.let {
+                    LabeledTextBlock(label = "Rejected", value = it, accent = LossColor)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabeledTextBlock(label: String, value: String, accent: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = accent
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.White.copy(alpha = 0.52f), RoundedCornerShape(10.dp))
+                .padding(10.dp)
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

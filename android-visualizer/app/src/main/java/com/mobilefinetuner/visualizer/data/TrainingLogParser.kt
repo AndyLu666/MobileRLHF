@@ -1,6 +1,7 @@
 package com.mobilefinetuner.visualizer.data
 
 import com.mobilefinetuner.visualizer.model.EventType
+import com.mobilefinetuner.visualizer.model.InferenceRecord
 import com.mobilefinetuner.visualizer.model.RssPoint
 import com.mobilefinetuner.visualizer.model.RunEvent
 import com.mobilefinetuner.visualizer.model.RunStatus
@@ -130,6 +131,7 @@ object TrainingLogParser {
                 "training complete" in lower ||
                 "training completed" in lower ||
                 "lora training completed" in lower ||
+                "[complete]" in lower ||
                 completeCnMarker in line
             ) {
                 hasCompletionMarker = true
@@ -352,6 +354,37 @@ object TrainingLogParser {
         return metrics.sortedBy { it.step }
     }
 
+    fun parseGeneratedResponsesJsonl(lines: List<String>): List<InferenceRecord> {
+        return lines.mapNotNull { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || !trimmed.startsWith("{")) return@mapNotNull null
+            val prompt = findString(trimmed, "prompt") ?: return@mapNotNull null
+            InferenceRecord(
+                promptId = findString(trimmed, "prompt_id"),
+                prompt = prompt,
+                completion = findString(trimmed, "completion"),
+                chosen = findString(trimmed, "chosen"),
+                elapsedMs = findDouble(trimmed, "elapsed_ms"),
+                source = findString(trimmed, "source")
+            )
+        }
+    }
+
+    fun parseInferenceFeedbackJsonl(lines: List<String>): List<InferenceRecord> {
+        return lines.mapNotNull { line ->
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || !trimmed.startsWith("{")) return@mapNotNull null
+            val prompt = findString(trimmed, "prompt") ?: return@mapNotNull null
+            InferenceRecord(
+                promptId = findString(trimmed, "prompt_id"),
+                prompt = prompt,
+                chosen = findString(trimmed, "chosen"),
+                rejected = findString(trimmed, "rejected"),
+                source = findString(trimmed, "source")
+            )
+        }
+    }
+
     private fun findDouble(line: String, key: String): Double? {
         val pattern = Regex("\"$key\"\\s*:\\s*([-+0-9.eE]+)")
         return pattern.find(line)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
@@ -360,5 +393,44 @@ object TrainingLogParser {
     private fun findInt(line: String, key: String): Int? {
         val pattern = Regex("\"$key\"\\s*:\\s*([-+0-9]+)")
         return pattern.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull()
+    }
+
+    private fun findString(line: String, key: String): String? {
+        val pattern = Regex("\"$key\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"")
+        val raw = pattern.find(line)?.groupValues?.getOrNull(1) ?: return null
+        return unescapeJson(raw)
+    }
+
+    private fun unescapeJson(raw: String): String {
+        val out = StringBuilder(raw.length)
+        var i = 0
+        while (i < raw.length) {
+            val ch = raw[i]
+            if (ch != '\\' || i + 1 >= raw.length) {
+                out.append(ch)
+                i += 1
+                continue
+            }
+            when (val next = raw[i + 1]) {
+                '\\' -> out.append('\\')
+                '"' -> out.append('"')
+                'n' -> out.append('\n')
+                'r' -> out.append('\r')
+                't' -> out.append('\t')
+                'u' -> {
+                    val hex = raw.substring((i + 2).coerceAtMost(raw.length), (i + 6).coerceAtMost(raw.length))
+                    val code = hex.takeIf { it.length == 4 }?.toIntOrNull(16)
+                    if (code != null) {
+                        out.append(code.toChar())
+                        i += 4
+                    } else {
+                        out.append("\\u")
+                    }
+                }
+                else -> out.append(next)
+            }
+            i += 2
+        }
+        return out.toString()
     }
 }
