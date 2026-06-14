@@ -31,7 +31,103 @@ float qwen_weight_value(const TensorPtr& weight, int64_t idx) {
     throw std::runtime_error("QwenModel: unsupported weight dtype " + DTypeUtils::to_string(weight->dtype()));
 }
 
+TensorPtr concat_seq_dim2(const TensorPtr& past, const TensorPtr& cur) {
+    if (!past || past->numel() == 0) {
+        return cur;
+    }
+    if (!cur || cur->numel() == 0) {
+        return past;
+    }
+    const auto& ps = past->shape();
+    const auto& cs = cur->shape();
+    if (ps.size() != 4 || cs.size() != 4 ||
+        ps[0] != cs[0] || ps[1] != cs[1] || ps[3] != cs[3]) {
+        throw std::runtime_error("concat_seq_dim2 expects matching [B,H,S,D] tensors");
+    }
+
+    const int64_t B = ps[0];
+    const int64_t H = ps[1];
+    const int64_t Sp = ps[2];
+    const int64_t Sc = cs[2];
+    const int64_t D = ps[3];
+    auto out = zeros({B, H, Sp + Sc, D}, past->dtype(), past->device());
+    const float* p = past->data<float>();
+    const float* c = cur->data<float>();
+    float* o = out->data<float>();
+    const int64_t past_row = Sp * D;
+    const int64_t cur_row = Sc * D;
+    const int64_t out_row = (Sp + Sc) * D;
+    for (int64_t b = 0; b < B; ++b) {
+        for (int64_t h = 0; h < H; ++h) {
+            const int64_t ph = (b * H + h) * past_row;
+            const int64_t ch = (b * H + h) * cur_row;
+            const int64_t oh = (b * H + h) * out_row;
+            std::memcpy(o + oh, p + ph, static_cast<size_t>(past_row) * sizeof(float));
+            std::memcpy(o + oh + past_row, c + ch, static_cast<size_t>(cur_row) * sizeof(float));
+        }
+    }
+    return out;
+}
+
+TensorPtr apply_rope_offset(const TensorPtr& x, int64_t position_offset, float rope_theta) {
+    const auto& shape = x->shape();
+    if (shape.size() != 4) {
+        throw std::runtime_error("apply_rope_offset expects [batch, heads, seq_len, head_dim]");
+    }
+    const int64_t B = shape[0];
+    const int64_t H = shape[1];
+    const int64_t S = shape[2];
+    const int64_t D = shape[3];
+    auto out = zeros(shape, x->dtype(), x->device());
+    const float* src = x->data<float>();
+    float* dst = out->data<float>();
+    std::memcpy(dst, src, static_cast<size_t>(x->numel()) * sizeof(float));
+    const int64_t half = D / 2;
+    for (int64_t b = 0; b < B; ++b) {
+        for (int64_t h = 0; h < H; ++h) {
+            for (int64_t s = 0; s < S; ++s) {
+                const int64_t pos = position_offset + s;
+                const int64_t base = ((b * H + h) * S + s) * D;
+                for (int64_t d = 0; d < half; ++d) {
+                    const float freq = 1.0f / std::pow(rope_theta, 2.0f * static_cast<float>(d) / static_cast<float>(D));
+                    const float angle = static_cast<float>(pos) * freq;
+                    const float c = std::cos(angle);
+                    const float sn = std::sin(angle);
+                    const float x1 = src[base + d];
+                    const float x2 = src[base + half + d];
+                    dst[base + d] = x1 * c - x2 * sn;
+                    dst[base + half + d] = x1 * sn + x2 * c;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+TensorPtr make_incremental_causal_mask(int64_t cur_len, int64_t total_len, int64_t past_len) {
+    auto mask = zeros({cur_len, total_len}, kFloat32, kCPU);
+    float* data = mask->data<float>();
+    for (int64_t i = 0; i < cur_len; ++i) {
+        const int64_t max_visible = past_len + i;
+        for (int64_t j = max_visible + 1; j < total_len; ++j) {
+            data[i * total_len + j] = -1e9f;
+        }
+    }
+    return mask;
+}
+
 } // namespace
+
+void QwenKVCache::reset(size_t num_layers) {
+    layers.clear();
+    layers.resize(num_layers);
+    seq_len = 0;
+}
+
+void QwenKVCache::clear() {
+    layers.clear();
+    seq_len = 0;
+}
 
 // -------------- Config loader (minimal JSON parsing) --------------
 QwenConfig QwenConfig::from_pretrained(const std::string& path) {
@@ -81,6 +177,7 @@ QwenConfig QwenConfig::from_pretrained(const std::string& path) {
 // -------------- Construction --------------
 QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
     embed_tokens_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.vocab_size, cfg.hidden_size}, kFloat32, kCPU);
+    lm_head_weight_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.vocab_size}, kFloat32, kCPU);
     final_norm_weight_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size}, kFloat32, kCPU);
     layers_.resize(cfg.num_hidden_layers);
     for (int i = 0; i < cfg.num_hidden_layers; ++i) {
@@ -97,6 +194,8 @@ QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
         b.v_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, kv_out}, kFloat32, kCPU);
         b.v_proj_bias = std::make_shared<Tensor>(std::vector<int64_t>{kv_out}, kFloat32, kCPU);
         b.o_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{attn_out, cfg.hidden_size}, kFloat32, kCPU);
+        b.q_norm_weight = std::make_shared<Tensor>(std::vector<int64_t>{Hd}, kFloat32, kCPU);
+        b.k_norm_weight = std::make_shared<Tensor>(std::vector<int64_t>{Hd}, kFloat32, kCPU);
         b.gate_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.intermediate_size}, kFloat32, kCPU);
         b.up_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.intermediate_size}, kFloat32, kCPU);
         b.down_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.intermediate_size, cfg.hidden_size}, kFloat32, kCPU);
@@ -105,7 +204,16 @@ QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
 
 // -------------- Weight dispatch --------------
 void QwenModel::assign_weight(const std::string& key, const TensorPtr& tensor) {
-    if (key == "embed_tokens.weight") embed_tokens_ = tensor;
+    if (key == "embed_tokens.weight") {
+        embed_tokens_ = tensor;
+        if (!lm_head_initialized_) {
+            lm_head_weight_ = transpose(tensor, 0, 1);
+        }
+    }
+    else if (key == "lm_head.weight") {
+        lm_head_weight_ = tensor;
+        lm_head_initialized_ = true;
+    }
     else if (key == "final_norm.weight") final_norm_weight_ = tensor;
     else {
         std::regex pat(R"(layers\.(\d+)\.(.+))");
@@ -124,6 +232,14 @@ void QwenModel::assign_weight(const std::string& key, const TensorPtr& tensor) {
             else if (sub == "self_attn.v_proj.weight") b.v_proj_weight = tensor;
             else if (sub == "self_attn.v_proj.bias") b.v_proj_bias = tensor;
             else if (sub == "self_attn.o_proj.weight") b.o_proj_weight = tensor;
+            else if (sub == "self_attn.q_norm.weight") {
+                b.q_norm_weight = tensor;
+                b.has_q_norm = true;
+            }
+            else if (sub == "self_attn.k_norm.weight") {
+                b.k_norm_weight = tensor;
+                b.has_k_norm = true;
+            }
             else if (sub == "mlp.gate_proj.weight") b.gate_proj_weight = tensor;
             else if (sub == "mlp.up_proj.weight") b.up_proj_weight = tensor;
             else if (sub == "mlp.down_proj.weight") b.down_proj_weight = tensor;
@@ -209,8 +325,9 @@ std::vector<TensorPtr> QwenModel::get_lora_parameters() const {
 
 std::vector<TensorPtr> QwenModel::parameters() const {
     std::vector<TensorPtr> params;
-    params.reserve(2 + static_cast<size_t>(config_.num_hidden_layers) * 12);
+    params.reserve(3 + static_cast<size_t>(config_.num_hidden_layers) * 14);
     params.push_back(embed_tokens_);
+    params.push_back(lm_head_weight_);
     params.push_back(final_norm_weight_);
     for (const auto& b : layers_) {
         params.push_back(b.input_norm_weight);
@@ -222,6 +339,8 @@ std::vector<TensorPtr> QwenModel::parameters() const {
         params.push_back(b.v_proj_weight);
         params.push_back(b.v_proj_bias);
         params.push_back(b.o_proj_weight);
+        params.push_back(b.q_norm_weight);
+        params.push_back(b.k_norm_weight);
         params.push_back(b.gate_proj_weight);
         params.push_back(b.up_proj_weight);
         params.push_back(b.down_proj_weight);
@@ -234,6 +353,7 @@ void QwenModel::freeze_base() {
         if (t) t->set_requires_grad(false);
     };
     freeze(embed_tokens_);
+    freeze(lm_head_weight_);
     freeze(final_norm_weight_);
     for (auto& b : layers_) {
         freeze(b.input_norm_weight);
@@ -242,6 +362,8 @@ void QwenModel::freeze_base() {
         freeze(b.k_proj_weight); freeze(b.k_proj_bias);
         freeze(b.v_proj_weight); freeze(b.v_proj_bias);
         freeze(b.o_proj_weight);
+        freeze(b.q_norm_weight);
+        freeze(b.k_norm_weight);
         freeze(b.gate_proj_weight);
         freeze(b.up_proj_weight);
         freeze(b.down_proj_weight);
@@ -288,9 +410,16 @@ TensorPtr QwenModel::attention(const TensorPtr& x, QwenBlock& blk,
     int64_t Hd = config_.head_dim;
     int64_t attn_out_dim = H * Hd;
 
-    auto q = blk.lora_initialized && blk.q_lin ? blk.q_lin->forward(x) : add(matmul(x, blk.q_proj_weight), blk.q_proj_bias);
-    auto k = blk.lora_initialized && blk.k_lin ? blk.k_lin->forward(x) : add(matmul(x, blk.k_proj_weight), blk.k_proj_bias);
-    auto v = blk.lora_initialized && blk.v_lin ? blk.v_lin->forward(x) : add(matmul(x, blk.v_proj_weight), blk.v_proj_bias);
+    auto add_optional_bias = [](const TensorPtr& value, const TensorPtr& bias) {
+        if (!bias || bias->numel() == 0) {
+            return value;
+        }
+        return add(value, bias);
+    };
+
+    auto q = blk.lora_initialized && blk.q_lin ? blk.q_lin->forward(x) : add_optional_bias(matmul(x, blk.q_proj_weight), blk.q_proj_bias);
+    auto k = blk.lora_initialized && blk.k_lin ? blk.k_lin->forward(x) : add_optional_bias(matmul(x, blk.k_proj_weight), blk.k_proj_bias);
+    auto v = blk.lora_initialized && blk.v_lin ? blk.v_lin->forward(x) : add_optional_bias(matmul(x, blk.v_proj_weight), blk.v_proj_bias);
 
     q = reshape(q, {B, S, H, Hd});
     q = permute(q, {0, 2, 1, 3});  // [B,H,S,Hd]
@@ -299,6 +428,13 @@ TensorPtr QwenModel::attention(const TensorPtr& x, QwenBlock& blk,
     v = reshape(v, {B, S, HKV, Hd});
     k = permute(k, {0, 2, 1, 3});  // [B,HKV,S,Hd]
     v = permute(v, {0, 2, 1, 3});
+
+    if (blk.has_q_norm) {
+        q = rms_norm_affine(q, blk.q_norm_weight, config_.rms_norm_eps);
+    }
+    if (blk.has_k_norm) {
+        k = rms_norm_affine(k, blk.k_norm_weight, config_.rms_norm_eps);
+    }
 
     // GQA: repeat kv heads to match H
     if (HKV != H) {
@@ -318,6 +454,75 @@ TensorPtr QwenModel::attention(const TensorPtr& x, QwenBlock& blk,
     if (pad_mask) scores = add(scores, pad_mask);
     auto probs = softmax(scores, -1);
     auto ctx = matmul(probs, v);  // [B,H,S,Hd]
+    ctx = permute(ctx, {0, 2, 1, 3});
+    ctx = reshape(ctx, {B, S, attn_out_dim});
+
+    auto out = blk.lora_initialized && blk.o_lin ? blk.o_lin->forward(ctx) : matmul(ctx, blk.o_proj_weight);
+    return out;
+}
+
+TensorPtr QwenModel::attention_with_cache(const TensorPtr& x, QwenBlock& blk,
+                                          QwenLayerKVCache& layer_cache,
+                                          int64_t past_len) {
+    int64_t B = x->shape()[0];
+    int64_t S = x->shape()[1];
+    int64_t H = config_.num_attention_heads;
+    int64_t HKV = config_.num_key_value_heads;
+    int64_t Hd = config_.head_dim;
+    int64_t attn_out_dim = H * Hd;
+
+    auto add_optional_bias = [](const TensorPtr& value, const TensorPtr& bias) {
+        if (!bias || bias->numel() == 0) {
+            return value;
+        }
+        return add(value, bias);
+    };
+
+    auto q = blk.lora_initialized && blk.q_lin ? blk.q_lin->forward(x) : add_optional_bias(matmul(x, blk.q_proj_weight), blk.q_proj_bias);
+    auto k = blk.lora_initialized && blk.k_lin ? blk.k_lin->forward(x) : add_optional_bias(matmul(x, blk.k_proj_weight), blk.k_proj_bias);
+    auto v = blk.lora_initialized && blk.v_lin ? blk.v_lin->forward(x) : add_optional_bias(matmul(x, blk.v_proj_weight), blk.v_proj_bias);
+
+    q = reshape(q, {B, S, H, Hd});
+    q = permute(q, {0, 2, 1, 3});
+    k = reshape(k, {B, S, HKV, Hd});
+    v = reshape(v, {B, S, HKV, Hd});
+    k = permute(k, {0, 2, 1, 3});
+    v = permute(v, {0, 2, 1, 3});
+
+    if (blk.has_q_norm) {
+        q = rms_norm_affine(q, blk.q_norm_weight, config_.rms_norm_eps);
+    }
+    if (blk.has_k_norm) {
+        k = rms_norm_affine(k, blk.k_norm_weight, config_.rms_norm_eps);
+    }
+
+    q = apply_rope_offset(q, past_len, config_.rope_theta);
+    k = apply_rope_offset(k, past_len, config_.rope_theta);
+
+    layer_cache.key = concat_seq_dim2(layer_cache.key, k);
+    layer_cache.value = concat_seq_dim2(layer_cache.value, v);
+    layer_cache.seq_len = past_len + S;
+
+    auto k_full = layer_cache.key;
+    auto v_full = layer_cache.value;
+
+    if (HKV != H) {
+        const int repeat = H / HKV;
+        k_full = repeat_kv_heads(k_full, repeat);
+        v_full = repeat_kv_heads(v_full, repeat);
+    }
+
+    auto k_t = transpose(k_full, 2, 3);
+    auto scores = matmul(q, k_t);
+    scores = mul(scores, 1.0f / std::sqrt(static_cast<float>(Hd)));
+
+    if (S > 1) {
+        auto mask = make_incremental_causal_mask(S, past_len + S, past_len);
+        scores = add(scores, mask);
+    }
+
+    auto probs = softmax(scores, -1);
+    auto ctx = matmul(probs, v_full);
     ctx = permute(ctx, {0, 2, 1, 3});
     ctx = reshape(ctx, {B, S, attn_out_dim});
 
@@ -387,12 +592,38 @@ TensorPtr QwenModel::forward_hidden(const TensorPtr& input_ids, const TensorPtr&
     return x;
 }
 
+TensorPtr QwenModel::forward_hidden_with_cache(const TensorPtr& input_ids, QwenKVCache& cache) {
+    if (cache.layers.size() != static_cast<size_t>(config_.num_hidden_layers)) {
+        cache.reset(static_cast<size_t>(config_.num_hidden_layers));
+    }
+
+    const int64_t past_len = cache.seq_len;
+    auto x = embedding_lookup(embed_tokens_, input_ids);
+
+    for (int i = 0; i < config_.num_hidden_layers; ++i) {
+        auto& blk = layers_[i];
+        auto normed = rms_norm_affine(x, blk.input_norm_weight, config_.rms_norm_eps);
+        auto attn_out = attention_with_cache(normed, blk, cache.layers[static_cast<size_t>(i)], past_len);
+        x = add(x, attn_out);
+        auto normed2 = rms_norm_affine(x, blk.post_norm_weight, config_.rms_norm_eps);
+        auto mlp_out = mlp(normed2, blk);
+        x = add(x, mlp_out);
+    }
+    x = rms_norm_affine(x, final_norm_weight_, config_.rms_norm_eps);
+    cache.seq_len = past_len + input_ids->shape()[1];
+    return x;
+}
+
 TensorPtr QwenModel::lm_head(const TensorPtr& hidden) {
-    return matmul_rhs_T(hidden, embed_tokens_); // [B,S,H] @ [V,H]^T -> [B,S,V]
+    return matmul(hidden, lm_head_weight_); // [B,S,H] @ [H,V] -> [B,S,V]
 }
 
 TensorPtr QwenModel::forward(const TensorPtr& input_ids, const TensorPtr& attention_mask) {
     return lm_head(forward_hidden(input_ids, attention_mask));
+}
+
+TensorPtr QwenModel::forward_with_cache(const TensorPtr& input_ids, QwenKVCache& cache) {
+    return lm_head(forward_hidden_with_cache(input_ids, cache));
 }
 
 } // namespace ops

@@ -190,6 +190,14 @@ TensorPtr AutoModelForCausalLM::forward(const TensorPtr& input_ids,
     }
 }
 
+TensorPtr AutoModelForCausalLM::forward_qwen_with_cache(const TensorPtr& input_ids,
+                                                        QwenKVCache& cache) {
+    if (spec_.family != ModelFamily::Qwen || !qwen_) {
+        throw std::runtime_error("AutoModelForCausalLM::forward_qwen_with_cache requires a Qwen model");
+    }
+    return qwen_->forward_with_cache(input_ids, cache);
+}
+
 void AutoModelForCausalLM::init_lora(const AutoLoraConfig& config) {
     switch (spec_.family) {
         case ModelFamily::GPT2: {

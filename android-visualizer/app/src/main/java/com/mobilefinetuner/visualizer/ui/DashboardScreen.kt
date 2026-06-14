@@ -40,12 +40,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,6 +89,7 @@ import com.mobilefinetuner.visualizer.model.InferenceRecord
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
+import com.mobilefinetuner.visualizer.model.NativeInferenceState
 import com.mobilefinetuner.visualizer.model.RunHandle
 import com.mobilefinetuner.visualizer.model.RunSnapshot
 import com.mobilefinetuner.visualizer.model.RunStatus
@@ -280,9 +283,14 @@ fun DashboardScreen(
                             compareRunId = ui.compareRunId,
                             config = ui.nativeDemoConfig,
                             runner = ui.nativeDemoRunner,
+                            inference = ui.nativeInference,
                             snapshot = ui.snapshot,
                             onSelect = viewModel::selectRun,
                             onSelectCompare = viewModel::selectComparisonRun,
+                            onInferenceChange = viewModel::updateNativeInference,
+                            onGenerate = viewModel::runNativeInference,
+                            onGeneratePair = viewModel::runNativeInferencePair,
+                            onChooseCandidate = viewModel::chooseNativeInferenceCandidate,
                             onConfigChange = viewModel::updateNativeDemoConfig,
                             onPreset = viewModel::applyNativeDemoPreset,
                             onStart = viewModel::startNativeDemoRun,
@@ -979,6 +987,15 @@ private fun InferenceFeedbackPanel(records: List<InferenceRecord>) {
                 record.chosen?.takeIf { it.isNotBlank() }?.let {
                     LabeledTextBlock(label = "Chosen", value = it, accent = NeonGreen)
                 }
+                record.chosenSource?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        text = "Chosen source: $it",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 record.rejected?.takeIf { it.isNotBlank() }?.let {
                     LabeledTextBlock(label = "Rejected", value = it, accent = LossColor)
                 }
@@ -1602,8 +1619,10 @@ private fun MiniMetricChip(
         )
         Text(
             text  = value,
-            style = MaterialTheme.typography.titleLarge,
-            color = accent
+            style = MaterialTheme.typography.titleMedium,
+            color = accent,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -1615,9 +1634,14 @@ private fun ExperimentsTab(
     compareRunId: String?,
     config: NativeDemoConfig,
     runner: NativeDemoRunnerState,
+    inference: NativeInferenceState,
     snapshot: RunSnapshot?,
     onSelect: (String) -> Unit,
     onSelectCompare: (String?) -> Unit,
+    onInferenceChange: (NativeInferenceState) -> Unit,
+    onGenerate: () -> Unit,
+    onGeneratePair: () -> Unit,
+    onChooseCandidate: (String) -> Unit,
     onConfigChange: (NativeDemoConfig) -> Unit,
     onPreset: (String) -> Unit,
     onStart: () -> Unit,
@@ -1628,6 +1652,16 @@ private fun ExperimentsTab(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        item {
+            NativeInferenceCard(
+                state = inference,
+                onStateChange = onInferenceChange,
+                onGenerate = onGenerate,
+                onGeneratePair = onGeneratePair,
+                onChooseCandidate = onChooseCandidate
+            )
+        }
+
         item {
             NativeDemoRunnerCard(
                 config = config,
@@ -1795,6 +1829,284 @@ private fun ExperimentsTab(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun NativeInferenceCard(
+    state: NativeInferenceState,
+    onStateChange: (NativeInferenceState) -> Unit,
+    onGenerate: () -> Unit,
+    onGeneratePair: () -> Unit,
+    onChooseCandidate: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FCFF)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Qwen Inference", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = if (state.isRunning) {
+                            "Running native Qwen generate..."
+                        } else {
+                            "Generate answers, choose A/B, then train DPO from the saved feedback."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (state.isRunning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 3.dp
+                    )
+                } else {
+                    Text(
+                        text = when {
+                            state.modelLoaded -> "LOADED"
+                            state.elapsedMs != null -> "${format1(state.elapsedMs)} ms"
+                            else -> "READY"
+                        },
+                        style = MaterialTheme.typography.labelLarge,
+                        color = NeonBlue,
+                        modifier = Modifier
+                            .background(NeonBlue.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
+            if (state.elapsedMs != null || state.modelLoaded) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 3
+                ) {
+                    MiniMetricChip(
+                        label = "Total",
+                        value = state.elapsedMs?.let { "${format1(it)} ms" } ?: "Loaded",
+                        accent = NeonBlue,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MiniMetricChip(
+                        label = "Load",
+                        value = state.loadElapsedMs?.let { "${format1(it)} ms" }
+                            ?: if (state.modelLoaded) "Cached" else "N/A",
+                        accent = RssColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MiniMetricChip(
+                        label = "Generate",
+                        value = state.generateElapsedMs?.let { "${format1(it)} ms" } ?: "N/A",
+                        accent = NeonGreen,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = state.modelDir,
+                onValueChange = { onStateChange(state.copy(modelDir = it)) },
+                enabled = !state.isRunning,
+                label = { Text("Model Dir") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = state.prompt,
+                onValueChange = { onStateChange(state.copy(prompt = it)) },
+                enabled = !state.isRunning,
+                label = { Text("Prompt") },
+                minLines = 3,
+                maxLines = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 2
+            ) {
+                IntField("Max Tokens", state.maxNewTokens, !state.isRunning, Modifier.weight(1f)) {
+                    onStateChange(state.copy(maxNewTokens = it))
+                }
+                DecimalField("Temp", state.temperature, !state.isRunning, Modifier.weight(1f)) {
+                    onStateChange(state.copy(temperature = it))
+                }
+                DecimalField("Top P", state.topP, !state.isRunning, Modifier.weight(1f)) {
+                    onStateChange(state.copy(topP = it))
+                }
+                Button(
+                    onClick = onGenerate,
+                    enabled = !state.isRunning && state.modelDir.isNotBlank() && state.prompt.isNotBlank(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 56.dp)
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Text("Generate", modifier = Modifier.padding(start = 8.dp))
+                }
+                OutlinedButton(
+                    onClick = onGeneratePair,
+                    enabled = !state.isRunning && state.modelDir.isNotBlank() && state.prompt.isNotBlank(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 56.dp)
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Generate A/B")
+                }
+            }
+
+            if (state.savedPairs > 0 || !state.feedbackJsonlPath.isNullOrBlank()) {
+                Surface(
+                    color = NeonGreen.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Saved feedback pairs: ${state.savedPairs}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = NeonGreen
+                        )
+                        Text(
+                            text = state.feedbackJsonlPath ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            state.lastChosenLabel?.let {
+                Text(
+                    text = "Last preference: $it",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = NeonGreen
+                )
+            }
+
+            state.error?.takeIf { it.isNotBlank() }?.let { message ->
+                Surface(
+                    color = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            state.output?.takeIf { it.isNotBlank() }?.let { output ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.White, RoundedCornerShape(14.dp))
+                        .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Response",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = output,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
+            val a = state.candidateA
+            val b = state.candidateB
+            if (!a.isNullOrBlank() || !b.isNullOrBlank()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 2
+                ) {
+                    CandidatePreferenceBlock(
+                        label = "A",
+                        text = a ?: "",
+                        enabled = !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        modifier = Modifier.weight(1f),
+                        onChoose = { onChooseCandidate("A") }
+                    )
+                    CandidatePreferenceBlock(
+                        label = "B",
+                        text = b ?: "",
+                        enabled = !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        modifier = Modifier.weight(1f),
+                        onChoose = { onChooseCandidate("B") }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CandidatePreferenceBlock(
+    label: String,
+    text: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onChoose: () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .background(Color.White, RoundedCornerShape(14.dp))
+            .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Answer $label",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = text.ifBlank { "No candidate generated." },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis
+        )
+        Button(
+            onClick = onChoose,
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Prefer $label")
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun NativeDemoRunnerCard(
     config: NativeDemoConfig,
     runner: NativeDemoRunnerState,
@@ -1807,6 +2119,7 @@ private fun NativeDemoRunnerCard(
     val running = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
     val last = snapshot?.metrics?.lastOrNull()
     var commandExpanded by remember { mutableStateOf(false) }
+    val usingFeedback = runner.trainingSourceLabel.contains("Qwen", ignoreCase = true)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1911,6 +2224,18 @@ private fun NativeDemoRunnerCard(
                 maxItemsInEachRow = 3
             ) {
                 MiniMetricChip(
+                    label = "Train Data",
+                    value = runner.trainingSourceLabel,
+                    accent = if (usingFeedback) NeonGreen else NeonBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Pairs",
+                    value = if (runner.trainingPairCount > 0) runner.trainingPairCount.toString() else "Bundled",
+                    accent = if (usingFeedback) NeonGreen else RssColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
                     label = "Preset",
                     value = config.presetName,
                     accent = NeonBlue,
@@ -1930,6 +2255,16 @@ private fun NativeDemoRunnerCard(
                 )
             }
 
+            runner.trainingJsonlPath?.takeIf { it.isNotBlank() }?.let { path ->
+                Text(
+                    text = "Training JSONL: $path",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1939,7 +2274,7 @@ private fun NativeDemoRunnerCard(
                     enabled = !running,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Run Demo")
+                    Text(if (usingFeedback) "Train on A/B" else "Run Demo")
                 }
                 OutlinedButton(
                     onClick = onStop,

@@ -48,6 +48,7 @@ public:
 
     TensorPtr forward(const TensorPtr& input_ids,
                       const TensorPtr& attention_mask = nullptr);
+    TensorPtr forward_qwen_with_cache(const TensorPtr& input_ids, QwenKVCache& cache);
 
     void init_lora(const AutoLoraConfig& config = AutoLoraConfig());
 

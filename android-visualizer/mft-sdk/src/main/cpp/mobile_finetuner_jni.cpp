@@ -2,12 +2,16 @@
 
 #include "mobile_finetuner/mobile_finetuner.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -185,6 +189,118 @@ int argmax_last_token(const ops::TensorPtr& logits) {
         }
     }
     return best_id;
+}
+
+int sample_last_token(const ops::TensorPtr& logits,
+                      float temperature,
+                      float top_p,
+                      std::mt19937& rng) {
+    if (temperature <= 0.0f) {
+        return argmax_last_token(logits);
+    }
+    if (!logits || logits->ndim() != 3) {
+        throw std::runtime_error("Expected logits with shape [batch, seq, vocab]");
+    }
+    if (logits->size(0) != 1) {
+        throw std::runtime_error("Generation currently supports batch size 1 only");
+    }
+    const int64_t seq_len = logits->size(1);
+    const int64_t vocab = logits->size(2);
+    if (seq_len <= 0 || vocab <= 0) {
+        throw std::runtime_error("Invalid logits shape");
+    }
+
+    const float* data = logits->data<float>();
+    const int64_t offset = (seq_len - 1) * vocab;
+    std::vector<float> scores(static_cast<size_t>(vocab));
+    float max_score = data[offset];
+    for (int64_t i = 0; i < vocab; ++i) {
+        const float value = data[offset + i];
+        scores[static_cast<size_t>(i)] = value;
+        if (value > max_score) {
+            max_score = value;
+        }
+    }
+
+    struct Candidate {
+        int id;
+        float prob;
+    };
+    std::vector<Candidate> candidates;
+    candidates.reserve(static_cast<size_t>(vocab));
+    double denom = 0.0;
+    for (int64_t i = 0; i < vocab; ++i) {
+        const float scaled = (scores[static_cast<size_t>(i)] - max_score) / temperature;
+        const float prob = std::exp(scaled);
+        candidates.push_back({static_cast<int>(i), prob});
+        denom += prob;
+    }
+    for (auto& c : candidates) {
+        c.prob = static_cast<float>(static_cast<double>(c.prob) / denom);
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.prob > b.prob;
+    });
+
+    double cumulative = 0.0;
+    size_t keep = 0;
+    for (; keep < candidates.size(); ++keep) {
+        cumulative += candidates[keep].prob;
+        if (cumulative >= top_p) {
+            ++keep;
+            break;
+        }
+    }
+    keep = std::max<size_t>(1, std::min(keep, candidates.size()));
+
+    std::vector<double> weights;
+    weights.reserve(keep);
+    for (size_t i = 0; i < keep; ++i) {
+        weights.push_back(candidates[i].prob);
+    }
+    std::discrete_distribution<size_t> dist(weights.begin(), weights.end());
+    return candidates[dist(rng)].id;
+}
+
+bool is_stop_token(int id, int eos) {
+    if (eos >= 0 && id == eos) return true;
+    return id == 151643 || id == 151645;
+}
+
+std::string make_qwen_chat_prompt(const std::string& prompt) {
+    return
+        "<|im_start|>system\n"
+        "You are a careful health and fitness assistant. Give practical, safe, concise advice."
+        "<|im_end|>\n"
+        "<|im_start|>user\n" +
+        prompt +
+        "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n";
+}
+
+std::string clean_qwen3_output(std::string text) {
+    const std::string begin = "<think>";
+    const std::string end = "</think>";
+    while (true) {
+        const size_t start = text.find(begin);
+        if (start == std::string::npos) break;
+        const size_t finish = text.find(end, start + begin.size());
+        if (finish == std::string::npos) {
+            text.erase(start, begin.size());
+            continue;
+        }
+        text.erase(start, finish + end.size() - start);
+    }
+    size_t left = 0;
+    while (left < text.size() && std::isspace(static_cast<unsigned char>(text[left]))) {
+        ++left;
+    }
+    size_t right = text.size();
+    while (right > left && std::isspace(static_cast<unsigned char>(text[right - 1]))) {
+        --right;
+    }
+    return text.substr(left, right - left);
 }
 
 void fill_parameters(ops::AutoModelForCausalLM& model, float value) {
@@ -436,7 +552,10 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeGenerate(
         jclass,
         jlong handle,
         jstring prompt,
-        jint max_new_tokens) {
+        jint max_new_tokens,
+        jfloat temperature,
+        jfloat top_p,
+        jlong seed) {
     return guarded(env, [&]() -> jstring {
         NativeSession* session = require_session(env, handle);
         if (session == nullptr) {
@@ -447,6 +566,12 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeGenerate(
         }
         if (max_new_tokens <= 0) {
             throw std::invalid_argument("maxNewTokens must be positive");
+        }
+        if (temperature < 0.0f) {
+            throw std::invalid_argument("temperature must be non-negative");
+        }
+        if (top_p <= 0.0f || top_p > 1.0f) {
+            throw std::invalid_argument("topP must be in (0, 1]");
         }
 
         if (!session->tokenizer) {
@@ -461,26 +586,40 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeGenerate(
             throw std::invalid_argument("prompt must not be empty");
         }
 
-        std::vector<int> tokens = session->tokenizer->encode(prompt_text);
+        const bool is_qwen = session->model->family() == ops::ModelFamily::Qwen;
+        const std::string model_prompt = is_qwen ? make_qwen_chat_prompt(prompt_text) : prompt_text;
+        std::vector<int> tokens = session->tokenizer->encode(model_prompt);
         if (tokens.empty()) {
             throw std::runtime_error("Tokenizer produced no prompt tokens");
         }
         const size_t prompt_token_count = tokens.size();
         const int eos = session->tokenizer->get_eos_token();
+        std::mt19937 rng(static_cast<uint32_t>(seed));
 
+        ops::QwenKVCache qwen_cache;
         for (int step = 0; step < max_new_tokens; ++step) {
-            auto input_ids = make_input_ids(tokens);
-            auto attention_mask = make_attention_mask(tokens.size());
-            auto logits = session->model->forward(input_ids, attention_mask);
-            const int next_id = argmax_last_token(logits);
+            auto input_ids = (is_qwen && step > 0)
+                ? make_input_ids(std::vector<int>{tokens.back()})
+                : make_input_ids(tokens);
+            ops::TensorPtr logits;
+            if (is_qwen) {
+                logits = session->model->forward_qwen_with_cache(input_ids, qwen_cache);
+            } else {
+                auto attention_mask = make_attention_mask(tokens.size());
+                logits = session->model->forward(input_ids, attention_mask);
+            }
+            const int next_id = sample_last_token(logits, temperature, top_p, rng);
             tokens.push_back(next_id);
-            if (eos >= 0 && next_id == eos) {
+            if (is_stop_token(next_id, eos)) {
                 break;
             }
         }
 
         std::vector<int> output_tokens(tokens.begin() + static_cast<long>(prompt_token_count), tokens.end());
-        const std::string completion = session->tokenizer->decode(output_tokens);
+        std::string completion = session->tokenizer->decode(output_tokens);
+        if (is_qwen) {
+            completion = clean_qwen3_output(completion);
+        }
         return env->NewStringUTF(completion.c_str());
     }, static_cast<jstring>(nullptr));
 }

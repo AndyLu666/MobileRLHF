@@ -11,10 +11,16 @@ Build the missing generation-inference step for the HFRL loop. For now, ignore c
 - LoRA adapters are saved after training.
 - The merged upstream adds `mft-sdk` with `open`, `initLora`, `createTrainer`, `trainStep`, and `selfTest`.
 - Qwen3-0.6B model/tokenizer support exists in `operator` and `examples/qwen_lora_finetune`.
-- Native C++ single-prompt Qwen3 generation exists through `infer_qwen`.
-- JNI/SDK exposes a basic greedy `generate(prompt, maxNewTokens)` API.
+- Native C++ single-prompt Qwen3 generation exists through `infer_qwen`; Qwen3
+  q/k norm and tied/output lm head loading are wired for normal text output.
+- Native C++ Qwen3 generation now uses KV cache by default for faster token
+  generation; `USE_KV_CACHE=0` remains available for speed/correctness checks.
+- JNI/SDK exposes a basic greedy `generate(prompt, maxNewTokens)` API and uses
+  the same Qwen KV-cache path.
 - Desktop C++ HFRL inference simulation exists through `hfrl_infer_sim`.
-- Android visualizer can read and display generated inference artifacts from a run folder.
+- Desktop Qwen examples enable BLAS on macOS through Accelerate.
+- Android visualizer can read and display generated inference artifacts from a run folder,
+  including whether `chosen` came from model output or a short-run fallback.
 
 ## Gap
 
@@ -30,20 +36,26 @@ The system does not yet expose generation inference:
 
 Implement a minimal native CLI that loads Qwen model/tokenizer, accepts a prompt, runs greedy token generation, decodes output, and prints the response. This proves the core inference path before UI/JNI.
 
-Status: done for Qwen3-0.6B base-model greedy generation.
+Status: done for Qwen3-0.6B base-model generation. Demo mode disables visible
+Qwen3 thinking traces by default (`THINKING=0`), supports optional sampling
+parameters, and uses KV cache by default.
 
 Acceptance:
 
 - Build target exists under `examples/qwen_lora_finetune`.
-- Command accepts `--model_dir`, `--prompt`, `--max_new_tokens`.
+- Command accepts `--model_dir`, `--prompt`, `--max_new_tokens`, `--temperature`,
+  `--top_p`, `--repetition_penalty`, `--chat_template`, and `--thinking`.
 - Works with a local Qwen directory when available.
 - Does not require DPO or feedback.
+- `USE_KV_CACHE=1` and `USE_KV_CACHE=0` produce matching greedy output on the
+  8-token smoke prompt; 32-token local timing improved from `17.08s` to `5.18s`.
 
 ### Issue 2: JNI/SDK Generate API
 
 Expose generation through `mft-sdk`.
 
-Status: done for a basic greedy `generate(prompt, maxNewTokens)` API.
+Status: done for a basic greedy `generate(prompt, maxNewTokens)` API. Qwen
+generation uses KV cache; non-Qwen models keep the previous full-forward path.
 
 Acceptance:
 
@@ -103,3 +115,8 @@ Acceptance:
   `reward_margin`, `chosen_reward`, `rejected_reward`, `grad_norm`, and `rss_mb`.
 - Android Overview displays parsed inference feedback records when the run folder
   contains `generated_responses.jsonl` or `inference_feedback.jsonl`.
+- `generated_responses.jsonl` records raw `completion` and `chosen_source`, so
+  short smoke output is not confused with real full-answer quality.
+- `USE_KV_CACHE=1` is the default. The local 32-token one-prompt HFRL smoke
+  improved from `16.703s` total / `13586.97ms` inference to `5.030s` total /
+  `1889.88ms` inference.

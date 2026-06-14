@@ -73,6 +73,7 @@ data class InferenceRecord(
     val completion: String? = null,
     val chosen: String? = null,
     val rejected: String? = null,
+    val chosenSource: String? = null,
     val elapsedMs: Double? = null,
     val source: String? = null
 )
@@ -149,8 +150,31 @@ data class NativeDemoRunnerState(
     val currentRunName: String? = null,
     val currentRunPath: String? = null,
     val commandPreview: String? = null,
+    val trainingSourceLabel: String = "HF fitness preference dataset",
+    val trainingJsonlPath: String? = null,
+    val trainingPairCount: Int = 0,
     val lastExitCode: Int? = null,
     val message: String? = null
+)
+
+data class NativeInferenceState(
+    val modelDir: String = "/data/local/tmp/mft_qwen3",
+    val prompt: String = "How can I maintain my fitness routine while traveling for work?",
+    val maxNewTokens: Int = 16,
+    val temperature: Double = 0.7,
+    val topP: Double = 0.9,
+    val modelLoaded: Boolean = false,
+    val isRunning: Boolean = false,
+    val output: String? = null,
+    val candidateA: String? = null,
+    val candidateB: String? = null,
+    val elapsedMs: Double? = null,
+    val loadElapsedMs: Double? = null,
+    val generateElapsedMs: Double? = null,
+    val savedPairs: Int = 0,
+    val feedbackJsonlPath: String? = null,
+    val lastChosenLabel: String? = null,
+    val error: String? = null
 )
 
 data class DashboardUiState(
@@ -164,6 +188,7 @@ data class DashboardUiState(
     val feedbackSession: FeedbackSessionState? = null,
     val nativeDemoConfig: NativeDemoConfig = NativeDemoConfig(),
     val nativeDemoRunner: NativeDemoRunnerState = NativeDemoRunnerState(),
+    val nativeInference: NativeInferenceState = NativeInferenceState(),
     val isLoading: Boolean = false,
     val error: String? = null
 )

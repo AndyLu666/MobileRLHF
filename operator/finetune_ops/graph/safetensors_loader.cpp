@@ -565,6 +565,7 @@ QwenKeyMapper::generate_qwen_mapping(int num_layers) {
     std::unordered_map<std::string, std::string> m;
     // Embeddings and final norm
     m["embed_tokens.weight"] = "model.embed_tokens.weight";
+    m["lm_head.weight"] = "lm_head.weight";
     m["final_norm.weight"] = "model.norm.weight";
     // Per-layer mappings
     for (int i = 0; i < num_layers; ++i) {
@@ -579,6 +580,8 @@ QwenKeyMapper::generate_qwen_mapping(int num_layers) {
         m[in + "self_attn.v_proj.weight"] = hf + "self_attn.v_proj.weight";
         m[in + "self_attn.v_proj.bias"]   = hf + "self_attn.v_proj.bias";
         m[in + "self_attn.o_proj.weight"] = hf + "self_attn.o_proj.weight";
+        m[in + "self_attn.q_norm.weight"] = hf + "self_attn.q_norm.weight";
+        m[in + "self_attn.k_norm.weight"] = hf + "self_attn.k_norm.weight";
         m[in + "mlp.gate_proj.weight"]    = hf + "mlp.gate_proj.weight";
         m[in + "mlp.up_proj.weight"]      = hf + "mlp.up_proj.weight";
         m[in + "mlp.down_proj.weight"]    = hf + "mlp.down_proj.weight";

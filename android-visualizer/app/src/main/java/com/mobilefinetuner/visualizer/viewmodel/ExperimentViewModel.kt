@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobilefinetuner.sdk.MobileFineTuner
 import com.mobilefinetuner.visualizer.data.FeedbackJsonl
 import com.mobilefinetuner.visualizer.data.NativeDemoCommandBuilder
 import com.mobilefinetuner.visualizer.data.TrainingLogParser
@@ -19,6 +20,7 @@ import com.mobilefinetuner.visualizer.model.InferenceRecord
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
+import com.mobilefinetuner.visualizer.model.NativeInferenceState
 import com.mobilefinetuner.visualizer.model.RssPoint
 import com.mobilefinetuner.visualizer.model.RunEvent
 import com.mobilefinetuner.visualizer.model.RunHandle
@@ -49,6 +51,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
     private var pollingJob: Job? = null
     private var nativeDemoJob: Job? = null
+    private var nativeInferenceJob: Job? = null
+    private var nativeInferenceSession: MobileFineTuner? = null
+    private var nativeInferenceModelDir: String? = null
     private var nativeDemoProcess: Process? = null
     private var nativeDemoRunDir: File? = null
     private var nativeDemoStopRequested: Boolean = false
@@ -62,6 +67,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.value = _uiState.value.copy(selectedRootUri = uri)
             scanRuns(uri)
         }
+        refreshNativeDemoCommandPreview()
     }
 
     fun selectTab(tab: DashboardTab) {
@@ -202,9 +208,246 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.value = _uiState.value.copy(
             nativeDemoConfig = sanitized,
             nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
-                commandPreview = buildNativeDemoPreview(sanitized)
+                commandPreview = buildNativeDemoPreview(sanitized),
+                trainingSourceLabel = currentNativeDemoTrainingSourceLabel(),
+                trainingJsonlPath = currentNativeDemoTrainingJsonlPath(),
+                trainingPairCount = countJsonlLines(currentNativeDemoTrainingJsonlFile())
             )
         )
+    }
+
+    fun updateNativeInference(state: NativeInferenceState) {
+        val modelDir = state.modelDir.trim()
+        if (modelDir != nativeInferenceModelDir && modelDir != _uiState.value.nativeInference.modelDir.trim()) {
+            closeNativeInferenceSession()
+        }
+        val sanitized = state.copy(
+            modelDir = modelDir,
+            prompt = state.prompt,
+            maxNewTokens = state.maxNewTokens.coerceIn(1, 256),
+            temperature = state.temperature.coerceIn(0.0, 2.0),
+            topP = state.topP.coerceIn(0.05, 1.0),
+            modelLoaded = modelDir == nativeInferenceModelDir && nativeInferenceSession != null,
+            error = null
+        )
+        _uiState.value = _uiState.value.copy(nativeInference = sanitized)
+    }
+
+    fun runNativeInference() {
+        if (nativeInferenceJob?.isActive == true) return
+        val request = _uiState.value.nativeInference
+        if (request.modelDir.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = request.copy(error = "Model directory is required.")
+            )
+            return
+        }
+        if (request.prompt.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = request.copy(error = "Prompt is required.")
+            )
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            nativeInference = request.copy(
+                isRunning = true,
+                output = null,
+                elapsedMs = null,
+                loadElapsedMs = null,
+                generateElapsedMs = null,
+                error = null
+            )
+        )
+
+        nativeInferenceJob = viewModelScope.launch(Dispatchers.IO) {
+            val startNs = System.nanoTime()
+            var loadMs = 0.0
+            var generateMs = 0.0
+            val result = runCatching {
+                val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
+                    nativeInferenceSession!!
+                } else {
+                    closeNativeInferenceSession()
+                    val loadStartNs = System.nanoTime()
+                    MobileFineTuner.open(request.modelDir).also { tuner ->
+                        loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
+                        nativeInferenceSession = tuner
+                        nativeInferenceModelDir = request.modelDir
+                    }
+                }
+                val generateStartNs = System.nanoTime()
+                session.generate(
+                    request.prompt,
+                    request.maxNewTokens,
+                    request.temperature.toFloat(),
+                    request.topP.toFloat(),
+                    42L
+                ).also {
+                    generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
+                }
+            }
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
+            val current = _uiState.value.nativeInference
+            val failure = result.exceptionOrNull()
+            if (failure != null) {
+                closeNativeInferenceSession()
+            }
+            _uiState.value = _uiState.value.copy(
+                nativeInference = current.copy(
+                    isRunning = false,
+                    modelLoaded = nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
+                    output = result.getOrNull(),
+                    elapsedMs = elapsedMs.takeIf { result.isSuccess },
+                    loadElapsedMs = loadMs.takeIf { result.isSuccess },
+                    generateElapsedMs = generateMs.takeIf { result.isSuccess },
+                    error = failure?.message ?: failure?.javaClass?.simpleName
+                )
+            )
+        }
+    }
+
+    fun runNativeInferencePair() {
+        if (nativeInferenceJob?.isActive == true) return
+        val request = _uiState.value.nativeInference
+        if (request.modelDir.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = request.copy(error = "Model directory is required.")
+            )
+            return
+        }
+        if (request.prompt.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = request.copy(error = "Prompt is required.")
+            )
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            nativeInference = request.copy(
+                isRunning = true,
+                output = null,
+                candidateA = null,
+                candidateB = null,
+                elapsedMs = null,
+                loadElapsedMs = null,
+                generateElapsedMs = null,
+                lastChosenLabel = null,
+                error = null
+            )
+        )
+
+        nativeInferenceJob = viewModelScope.launch(Dispatchers.IO) {
+            val startNs = System.nanoTime()
+            var loadMs = 0.0
+            var generateMs = 0.0
+            val result = runCatching {
+                val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
+                    nativeInferenceSession!!
+                } else {
+                    closeNativeInferenceSession()
+                    val loadStartNs = System.nanoTime()
+                    MobileFineTuner.open(request.modelDir).also { tuner ->
+                        loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
+                        nativeInferenceSession = tuner
+                        nativeInferenceModelDir = request.modelDir
+                    }
+                }
+                val generateStartNs = System.nanoTime()
+                val a = session.generate(
+                    request.prompt,
+                    request.maxNewTokens,
+                    request.temperature.toFloat(),
+                    request.topP.toFloat(),
+                    System.currentTimeMillis()
+                )
+                val b = session.generate(
+                    request.prompt,
+                    request.maxNewTokens,
+                    request.temperature.toFloat(),
+                    request.topP.toFloat(),
+                    System.currentTimeMillis() + 104729L
+                )
+                generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
+                a to b
+            }
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
+            val current = _uiState.value.nativeInference
+            val failure = result.exceptionOrNull()
+            if (failure != null) {
+                closeNativeInferenceSession()
+            }
+            val pair = result.getOrNull()
+            _uiState.value = _uiState.value.copy(
+                nativeInference = current.copy(
+                    isRunning = false,
+                    modelLoaded = nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
+                    output = null,
+                    candidateA = pair?.first,
+                    candidateB = pair?.second,
+                    elapsedMs = elapsedMs.takeIf { result.isSuccess },
+                    loadElapsedMs = loadMs.takeIf { result.isSuccess },
+                    generateElapsedMs = generateMs.takeIf { result.isSuccess },
+                    feedbackJsonlPath = inferenceFeedbackJsonlFile().absolutePath,
+                    error = failure?.message ?: failure?.javaClass?.simpleName
+                )
+            )
+        }
+    }
+
+    fun chooseNativeInferenceCandidate(label: String) {
+        val state = _uiState.value.nativeInference
+        val a = state.candidateA?.takeIf { it.isNotBlank() } ?: return
+        val b = state.candidateB?.takeIf { it.isNotBlank() } ?: return
+        val normalized = label.trim().uppercase(Locale.US)
+        if (normalized != "A" && normalized != "B") return
+
+        val prompt = FeedbackPrompt(
+            prompt = state.prompt,
+            answerA = a,
+            answerB = b
+        )
+        val file = inferenceFeedbackJsonlFile()
+        val appendError = runCatching {
+            file.parentFile?.mkdirs()
+            val line = FeedbackJsonl.encodeChoice(
+                FeedbackJsonl.ChoiceRecord(
+                    prompt = prompt,
+                    chosenLabel = normalized,
+                    sessionId = "qwen_infer_${System.currentTimeMillis()}",
+                    choiceIndex = state.savedPairs,
+                    timestampMs = System.currentTimeMillis(),
+                    source = "android_qwen_inference_feedback"
+                )
+            )
+            file.appendText(line + "\n")
+        }.exceptionOrNull()
+
+        _uiState.value = _uiState.value.copy(
+            nativeInference = state.copy(
+                savedPairs = if (appendError == null) state.savedPairs + 1 else state.savedPairs,
+                feedbackJsonlPath = file.absolutePath,
+                lastChosenLabel = normalized.takeIf { appendError == null },
+                error = appendError?.message ?: appendError?.javaClass?.simpleName
+            ),
+            nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
+                commandPreview = buildNativeDemoPreview(_uiState.value.nativeDemoConfig),
+                trainingSourceLabel = currentNativeDemoTrainingSourceLabel(),
+                trainingJsonlPath = currentNativeDemoTrainingJsonlPath(),
+                trainingPairCount = countJsonlLines(currentNativeDemoTrainingJsonlFile())
+            )
+        )
+    }
+
+    private fun closeNativeInferenceSession() {
+        runCatching { nativeInferenceSession?.close() }
+        nativeInferenceSession = null
+        nativeInferenceModelDir = null
+    }
+
+    override fun onCleared() {
+        closeNativeInferenceSession()
+        super.onCleared()
     }
 
     fun startNativeDemoRun() {
@@ -214,16 +457,29 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         nativeDemoJob = viewModelScope.launch(Dispatchers.IO) {
             val app = getApplication<Application>()
             val root = app.filesDir
-            val runName = "phone_hf_fitness_${config.steps}s_${timestampSuffix()}"
+            val inferenceFeedbackFile = inferenceFeedbackJsonlFile()
+            val useInferenceFeedback = inferenceFeedbackFile.exists() && inferenceFeedbackFile.length() > 0L
+            val runPrefix = if (useInferenceFeedback) "phone_qwen_ab_dpo" else "phone_hf_fitness"
+            val runName = "${runPrefix}_${config.steps}s_${timestampSuffix()}"
             val runDir = File(root, "mft_runs/$runName")
-            val trainFile = File(root, "mft_demo_data/hf_fitness_pref_train.jsonl")
+            val trainFile = if (useInferenceFeedback) {
+                File(runDir, "inference_feedback.jsonl")
+            } else {
+                File(root, "mft_demo_data/hf_fitness_pref_train.jsonl")
+            }
             val evalFile = File(root, "mft_demo_data/hf_fitness_pref_eval.jsonl")
 
             try {
                 nativeDemoStopRequested = false
                 nativeDemoRunDir = runDir
                 runDir.mkdirs()
-                writeFitnessPreferenceData(trainFile, evalFile)
+                if (useInferenceFeedback) {
+                    writeFitnessPreferenceData(File(root, "mft_demo_data/hf_fitness_pref_train.jsonl"), evalFile)
+                    inferenceFeedbackFile.copyTo(trainFile, overwrite = true)
+                } else {
+                    writeFitnessPreferenceData(trainFile, evalFile)
+                }
+                val pairCount = countJsonlLines(trainFile)
 
                 val paths = NativeDemoCommandBuilder.Paths(
                     binaryPath = nativeDemoBinaryPath(app),
@@ -246,7 +502,18 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                         currentRunName = runName,
                         currentRunPath = runDir.absolutePath,
                         commandPreview = command,
-                        message = "Running native demo in app storage."
+                        trainingSourceLabel = if (useInferenceFeedback) {
+                            "Qwen A/B feedback"
+                        } else {
+                            "HF fitness preference dataset"
+                        },
+                        trainingJsonlPath = trainFile.absolutePath,
+                        trainingPairCount = pairCount,
+                        message = if (useInferenceFeedback) {
+                            "Training native DPO on saved Qwen A/B feedback."
+                        } else {
+                            "Training native DPO on bundled HF fitness preferences."
+                        }
                     ),
                     error = null
                 )
@@ -409,6 +676,12 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         val app = getApplication<Application>()
         val root = app.getExternalFilesDir(null) ?: app.filesDir
         return File(root, "hfrl_feedback/android_ab_feedback.jsonl")
+    }
+
+    private fun inferenceFeedbackJsonlFile(): File {
+        val app = getApplication<Application>()
+        val root = app.filesDir
+        return File(root, "mft_demo_data/inference_feedback.jsonl")
     }
 
     fun selectRun(runId: String) {
@@ -628,6 +901,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             val source = generatedByKey[inferenceKey(item)]
             item.copy(
                 completion = source?.completion ?: item.completion,
+                chosenSource = item.chosenSource ?: source?.chosenSource,
                 elapsedMs = source?.elapsedMs ?: item.elapsedMs,
                 source = item.source ?: source?.source
             )
@@ -878,19 +1152,62 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         )
     }
 
+    private fun refreshNativeDemoCommandPreview() {
+        val config = _uiState.value.nativeDemoConfig
+        _uiState.value = _uiState.value.copy(
+            nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
+                commandPreview = buildNativeDemoPreview(config),
+                trainingSourceLabel = currentNativeDemoTrainingSourceLabel(),
+                trainingJsonlPath = currentNativeDemoTrainingJsonlPath(),
+                trainingPairCount = countJsonlLines(currentNativeDemoTrainingJsonlFile())
+            )
+        )
+    }
+
     private fun buildNativeDemoPreview(config: NativeDemoConfig): String {
         val app = getApplication<Application>()
         val root = app.filesDir.absolutePath
+        val trainJsonl = currentNativeDemoTrainingJsonlPath()
         return NativeDemoCommandBuilder.buildShellCommand(
             config,
             NativeDemoCommandBuilder.Paths(
                 binaryPath = nativeDemoBinaryPath(app),
-                trainJsonl = "$root/mft_demo_data/hf_fitness_pref_train.jsonl",
+                trainJsonl = trainJsonl,
                 evalJsonl = "$root/mft_demo_data/hf_fitness_pref_eval.jsonl",
                 runDir = "$root/mft_runs/<new-run>",
                 loraOut = "hf_fitness_adapter_${config.steps}s.safetensors"
             )
         )
+    }
+
+    private fun currentNativeDemoTrainingJsonlFile(): File {
+        val app = getApplication<Application>()
+        val feedback = inferenceFeedbackJsonlFile()
+        return if (feedback.exists() && feedback.length() > 0L) {
+            feedback
+        } else {
+            File(app.filesDir, "mft_demo_data/hf_fitness_pref_train.jsonl")
+        }
+    }
+
+    private fun currentNativeDemoTrainingJsonlPath(): String {
+        return currentNativeDemoTrainingJsonlFile().absolutePath
+    }
+
+    private fun currentNativeDemoTrainingSourceLabel(): String {
+        val feedback = inferenceFeedbackJsonlFile()
+        return if (feedback.exists() && feedback.length() > 0L) {
+            "Qwen A/B feedback"
+        } else {
+            "HF fitness preference dataset"
+        }
+    }
+
+    private fun countJsonlLines(file: File): Int {
+        if (!file.exists() || file.length() == 0L) return 0
+        return runCatching {
+            file.useLines { lines -> lines.count { it.isNotBlank() } }
+        }.getOrDefault(0)
     }
 
     private fun nativeDemoBinaryPath(app: Application): String {

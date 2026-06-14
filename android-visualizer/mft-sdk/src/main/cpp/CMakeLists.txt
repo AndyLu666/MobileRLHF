@@ -10,7 +10,12 @@ set(MFT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../..")
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(OPERATORS_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-set(USE_BLAS OFF CACHE BOOL "" FORCE)
+option(MFT_ANDROID_USE_OPENBLAS "Enable OpenBLAS for Android native kernels" OFF)
+if(MFT_ANDROID_USE_OPENBLAS)
+    set(USE_BLAS ON CACHE BOOL "Enable BLAS for Android native kernels" FORCE)
+else()
+    set(USE_BLAS OFF CACHE BOOL "" FORCE)
+endif()
 
 add_subdirectory("${MFT_ROOT}/operator" "${CMAKE_BINARY_DIR}/mobilefinetuner-operator")
 

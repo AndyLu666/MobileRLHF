@@ -364,6 +364,7 @@ object TrainingLogParser {
                 prompt = prompt,
                 completion = findString(trimmed, "completion"),
                 chosen = findString(trimmed, "chosen"),
+                chosenSource = findString(trimmed, "chosen_source"),
                 elapsedMs = findDouble(trimmed, "elapsed_ms"),
                 source = findString(trimmed, "source")
             )
@@ -380,6 +381,7 @@ object TrainingLogParser {
                 prompt = prompt,
                 chosen = findString(trimmed, "chosen"),
                 rejected = findString(trimmed, "rejected"),
+                chosenSource = findString(trimmed, "chosen_source"),
                 source = findString(trimmed, "source")
             )
         }

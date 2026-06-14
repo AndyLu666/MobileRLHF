@@ -43,6 +43,10 @@ struct QwenBlock {
     TensorPtr k_proj_weight, k_proj_bias;
     TensorPtr v_proj_weight, v_proj_bias;
     TensorPtr o_proj_weight;
+    TensorPtr q_norm_weight;
+    TensorPtr k_norm_weight;
+    bool has_q_norm = false;
+    bool has_k_norm = false;
 
     TensorPtr gate_proj_weight;
     TensorPtr up_proj_weight;
@@ -56,14 +60,30 @@ struct QwenBlock {
     bool lora_initialized = false;
 };
 
+struct QwenLayerKVCache {
+    TensorPtr key;    // [batch, kv_heads, seq_len, head_dim], RoPE already applied
+    TensorPtr value;  // [batch, kv_heads, seq_len, head_dim]
+    int64_t seq_len = 0;
+};
+
+struct QwenKVCache {
+    std::vector<QwenLayerKVCache> layers;
+    int64_t seq_len = 0;
+
+    void reset(size_t num_layers);
+    void clear();
+};
+
 class QwenModel {
 public:
     explicit QwenModel(const QwenConfig& cfg);
     ~QwenModel() = default;
 
     TensorPtr forward_hidden(const TensorPtr& input_ids, const TensorPtr& attention_mask = nullptr);
+    TensorPtr forward_hidden_with_cache(const TensorPtr& input_ids, QwenKVCache& cache);
     TensorPtr lm_head(const TensorPtr& hidden);
     TensorPtr forward(const TensorPtr& input_ids, const TensorPtr& attention_mask = nullptr);
+    TensorPtr forward_with_cache(const TensorPtr& input_ids, QwenKVCache& cache);
     const TensorPtr& embedding_weight() const { return embed_tokens_; }
 
     /**
@@ -85,7 +105,9 @@ public:
 private:
     QwenConfig config_;
     TensorPtr embed_tokens_;      // [vocab, hidden]
+    TensorPtr lm_head_weight_;    // [hidden, vocab]
     TensorPtr final_norm_weight_; // [hidden]
+    bool lm_head_initialized_ = false;
 
     std::vector<QwenBlock> layers_;
 
@@ -94,6 +116,9 @@ private:
     TensorPtr attention(const TensorPtr& x, QwenBlock& blk,
                         const TensorPtr& causal_mask,
                         const TensorPtr& pad_mask, int64_t seq_len);
+    TensorPtr attention_with_cache(const TensorPtr& x, QwenBlock& blk,
+                                   QwenLayerKVCache& layer_cache,
+                                   int64_t past_len);
     TensorPtr mlp(const TensorPtr& x, QwenBlock& blk);
 };
 
