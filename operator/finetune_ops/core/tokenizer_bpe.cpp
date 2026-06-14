@@ -260,7 +260,7 @@ static bool starts_with_ascii(const std::string& text, size_t pos, const char* n
     return pos + n <= text.size() && text.compare(pos, n, needle) == 0;
 }
 
-static std::vector<std::string> split_gpt2_like_words(const std::string& text) {
+[[maybe_unused]] static std::vector<std::string> split_gpt2_like_words(const std::string& text) {
     std::vector<std::string> words;
     size_t i = 0;
     while (i < text.size()) {
