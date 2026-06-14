@@ -127,7 +127,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         )
         demoCursor = DEMO_START_CURSOR
         _uiState.value = _uiState.value.copy(
-            activeTab = DashboardTab.OVERVIEW,
+            activeTab = DashboardTab.EXPERIMENTS,
             runHandles = demoRuns,
             selectedRunId = DEMO_PRIMARY_ID,
             compareRunId = DEMO_COMPARE_ID,
@@ -144,7 +144,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         pollingJob?.cancel()
         dpoCursor = DPO_START_CURSOR
         _uiState.value = _uiState.value.copy(
-            activeTab = DashboardTab.OVERVIEW,
+            activeTab = DashboardTab.EXPERIMENTS,
             runHandles = emptyList(),
             selectedRunId = null,
             compareRunId = null,
@@ -256,6 +256,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 elapsedMs = null,
                 loadElapsedMs = null,
                 generateElapsedMs = null,
+                lastChosenLabel = null,
+                feedbackStatus = null,
+                debugLines = appendInferenceLog(request, "Single generation started."),
                 error = null
             )
         )
@@ -301,6 +304,14 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     elapsedMs = elapsedMs.takeIf { result.isSuccess },
                     loadElapsedMs = loadMs.takeIf { result.isSuccess },
                     generateElapsedMs = generateMs.takeIf { result.isSuccess },
+                    debugLines = appendInferenceLog(
+                        current,
+                        if (result.isSuccess) {
+                            "Single generation finished in ${formatDemoValue("%.1f", elapsedMs)} ms."
+                        } else {
+                            "Single generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
+                        }
+                    ),
                     error = failure?.message ?: failure?.javaClass?.simpleName
                 )
             )
@@ -333,6 +344,11 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 loadElapsedMs = null,
                 generateElapsedMs = null,
                 lastChosenLabel = null,
+                feedbackStatus = null,
+                debugLines = appendInferenceLog(
+                    request,
+                    "A/B generation started: max=${request.maxNewTokens}, temp=${formatDemoValue("%.2f", request.temperature)}, topP=${formatDemoValue("%.2f", request.topP)}."
+                ),
                 error = null
             )
         )
@@ -389,6 +405,15 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     loadElapsedMs = loadMs.takeIf { result.isSuccess },
                     generateElapsedMs = generateMs.takeIf { result.isSuccess },
                     feedbackJsonlPath = inferenceFeedbackJsonlFile().absolutePath,
+                    feedbackStatus = null,
+                    debugLines = appendInferenceLog(
+                        current,
+                        if (result.isSuccess) {
+                            "A/B generated in ${formatDemoValue("%.1f", elapsedMs)} ms. Choose A or B."
+                        } else {
+                            "A/B generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
+                        }
+                    ),
                     error = failure?.message ?: failure?.javaClass?.simpleName
                 )
             )
@@ -397,6 +422,15 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
     fun chooseNativeInferenceCandidate(label: String) {
         val state = _uiState.value.nativeInference
+        if (state.lastChosenLabel != null) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Preference ${state.lastChosenLabel} already saved. Generate A/B again for another pair.",
+                    debugLines = appendInferenceLog(state, "Ignored duplicate preference tap; pair already saved.")
+                )
+            )
+            return
+        }
         val a = state.candidateA?.takeIf { it.isNotBlank() } ?: return
         val b = state.candidateB?.takeIf { it.isNotBlank() } ?: return
         val normalized = label.trim().uppercase(Locale.US)
@@ -428,6 +462,19 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 savedPairs = if (appendError == null) state.savedPairs + 1 else state.savedPairs,
                 feedbackJsonlPath = file.absolutePath,
                 lastChosenLabel = normalized.takeIf { appendError == null },
+                feedbackStatus = if (appendError == null) {
+                    "Saved preference $normalized. Native DPO will use ${state.savedPairs + 1} feedback pair(s)."
+                } else {
+                    "Failed to save preference: ${appendError.message ?: appendError.javaClass.simpleName}"
+                },
+                debugLines = appendInferenceLog(
+                    state,
+                    if (appendError == null) {
+                        "Preference $normalized saved to ${file.name}."
+                    } else {
+                        "Preference save failed: ${appendError.message ?: appendError.javaClass.simpleName}."
+                    }
+                ),
                 error = appendError?.message ?: appendError?.javaClass?.simpleName
             ),
             nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
@@ -437,6 +484,10 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 trainingPairCount = countJsonlLines(currentNativeDemoTrainingJsonlFile())
             )
         )
+    }
+
+    private fun appendInferenceLog(state: NativeInferenceState, message: String): List<String> {
+        return (state.debugLines + message).takeLast(8)
     }
 
     private fun closeNativeInferenceSession() {
@@ -493,7 +544,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 val runs = listOf(handle) + _uiState.value.runHandles.filterNot { it.id == handle.id }
 
                 _uiState.value = _uiState.value.copy(
-                    activeTab = DashboardTab.OVERVIEW,
+                    activeTab = DashboardTab.EXPERIMENTS,
                     runHandles = runs,
                     selectedRunId = handle.id,
                     compareRunId = _uiState.value.compareRunId?.takeIf { it != handle.id },
@@ -640,7 +691,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         )
         dpoCursor = DPO_START_CURSOR
         _uiState.value = _uiState.value.copy(
-            activeTab = DashboardTab.OVERVIEW,
+            activeTab = DashboardTab.EXPERIMENTS,
             runHandles = dpoRuns,
             selectedRunId = DPO_TEST_ID,
             compareRunId = null,

@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -34,7 +33,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -120,6 +118,15 @@ fun DashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val ui by viewModel.uiState.collectAsState()
+    val tabOrder = remember {
+        listOf(
+            DashboardTab.EXPERIMENTS,
+            DashboardTab.OVERVIEW,
+            DashboardTab.TRAINING,
+            DashboardTab.COMPARISON,
+            DashboardTab.LOGS
+        )
+    }
 
     val picker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -205,25 +212,27 @@ fun DashboardScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                ControlBar(
-                    runs = ui.runHandles,
-                    selectedRunId = ui.selectedRunId,
-                    compareRunId = ui.compareRunId,
-                    onPickDirectory = { picker.launch(null) },
-                    onEnableDemo = viewModel::enableDemoMode,
-                    onEnableDpoTest = viewModel::enableDpoTestMode,
-                    onSelectRun = viewModel::selectRun,
-                    onSelectCompareRun = viewModel::selectComparisonRun
-                )
+                if (ui.activeTab != DashboardTab.EXPERIMENTS) {
+                    ControlBar(
+                        runs = ui.runHandles,
+                        selectedRunId = ui.selectedRunId,
+                        compareRunId = ui.compareRunId,
+                        onPickDirectory = { picker.launch(null) },
+                        onEnableDemo = viewModel::enableDemoMode,
+                        onEnableDpoTest = viewModel::enableDpoTestMode,
+                        onSelectRun = viewModel::selectRun,
+                        onSelectCompareRun = viewModel::selectComparisonRun
+                    )
+                }
 
                 TabRow(
-                    selectedTabIndex = ui.activeTab.ordinal,
+                    selectedTabIndex = tabOrder.indexOf(ui.activeTab).coerceAtLeast(0),
                     modifier = Modifier
                         .padding(horizontal = 12.dp)
                         .clip(RoundedCornerShape(16.dp)),
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.84f)
                 ) {
-                    DashboardTab.entries.forEach { tab ->
+                    tabOrder.forEach { tab ->
                         Tab(
                             selected = tab == ui.activeTab,
                             onClick = { viewModel.selectTab(tab) },
@@ -263,7 +272,7 @@ fun DashboardScreen(
                     }
                 ) { tab ->
                     val feedbackSession = ui.feedbackSession
-                    if (feedbackSession != null && !feedbackSession.isComplete) {
+                    if (feedbackSession != null && !feedbackSession.isComplete && tab != DashboardTab.EXPERIMENTS) {
                         FeedbackCollectionPanel(
                             session = feedbackSession,
                             onChoose = viewModel::chooseFeedback
@@ -285,8 +294,11 @@ fun DashboardScreen(
                             runner = ui.nativeDemoRunner,
                             inference = ui.nativeInference,
                             snapshot = ui.snapshot,
-                            onSelect = viewModel::selectRun,
-                            onSelectCompare = viewModel::selectComparisonRun,
+                            feedbackSession = feedbackSession,
+                            onPickDirectory = { picker.launch(null) },
+                            onEnableDemo = viewModel::enableDemoMode,
+                            onEnableDpoTest = viewModel::enableDpoTestMode,
+                            onChooseFeedback = viewModel::chooseFeedback,
                             onInferenceChange = viewModel::updateNativeInference,
                             onGenerate = viewModel::runNativeInference,
                             onGeneratePair = viewModel::runNativeInferencePair,
@@ -471,71 +483,65 @@ private fun FeedbackCollectionPanel(
     val total = session.prompts.size
     val currentNumber = session.currentIndex + 1
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(12.dp),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                shape = RoundedCornerShape(18.dp)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            shape = RoundedCornerShape(18.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Human Feedback",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Text(
-                            text = "$currentNumber/$total",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
                     Text(
-                        text = current.prompt,
-                        style = MaterialTheme.typography.titleMedium,
+                        text = "Human Feedback",
+                        style = MaterialTheme.typography.titleLarge,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Choose the better response. Training starts after ${total - session.chosenLabels.size} choices.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "$currentNumber/$total",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     )
                 }
+                Text(
+                    text = current.prompt,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Choose the better response. Training starts after ${total - session.chosenLabels.size} choices.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
-
-        item {
-            FeedbackChoiceCard(
-                label = "A",
-                text = current.answerA,
-                accent = NeonBlue,
-                onClick = { onChoose("A") }
-            )
-        }
-        item {
-            FeedbackChoiceCard(
-                label = "B",
-                text = current.answerB,
-                accent = NeonGreen,
-                onClick = { onChoose("B") }
-            )
-        }
+        FeedbackChoiceCard(
+            label = "A",
+            text = current.answerA,
+            accent = NeonBlue,
+            onClick = { onChoose("A") }
+        )
+        FeedbackChoiceCard(
+            label = "B",
+            text = current.answerB,
+            accent = NeonGreen,
+            onClick = { onChoose("B") }
+        )
     }
 }
 
@@ -1636,8 +1642,11 @@ private fun ExperimentsTab(
     runner: NativeDemoRunnerState,
     inference: NativeInferenceState,
     snapshot: RunSnapshot?,
-    onSelect: (String) -> Unit,
-    onSelectCompare: (String?) -> Unit,
+    feedbackSession: FeedbackSessionState?,
+    onPickDirectory: () -> Unit,
+    onEnableDemo: () -> Unit,
+    onEnableDpoTest: () -> Unit,
+    onChooseFeedback: (String) -> Unit,
     onInferenceChange: (NativeInferenceState) -> Unit,
     onGenerate: () -> Unit,
     onGeneratePair: () -> Unit,
@@ -1652,6 +1661,29 @@ private fun ExperimentsTab(
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        item {
+            DemoCommandCenter(
+                runs = runs,
+                selectedRunId = selectedRunId,
+                compareRunId = compareRunId,
+                runner = runner,
+                inference = inference,
+                snapshot = snapshot,
+                onPickDirectory = onPickDirectory,
+                onEnableDemo = onEnableDemo,
+                onEnableDpoTest = onEnableDpoTest
+            )
+        }
+
+        if (feedbackSession != null && !feedbackSession.isComplete) {
+            item {
+                FeedbackCollectionPanel(
+                    session = feedbackSession,
+                    onChoose = onChooseFeedback
+                )
+            }
+        }
+
         item {
             NativeInferenceCard(
                 state = inference,
@@ -1673,155 +1705,147 @@ private fun ExperimentsTab(
                 onStop = onStop
             )
         }
+    }
+}
 
-        if (runs.isEmpty()) {
-            item {
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DemoCommandCenter(
+    runs: List<RunHandle>,
+    selectedRunId: String?,
+    compareRunId: String?,
+    runner: NativeDemoRunnerState,
+    inference: NativeInferenceState,
+    snapshot: RunSnapshot?,
+    onPickDirectory: () -> Unit,
+    onEnableDemo: () -> Unit,
+    onEnableDpoTest: () -> Unit
+) {
+    val selectedRun = runs.firstOrNull { it.id == selectedRunId }?.name ?: "No run selected"
+    val compareRun = runs.firstOrNull { it.id == compareRunId }?.name ?: "None"
+    val lastMetric = snapshot?.metrics?.lastOrNull()
+    val isTraining = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
+    val inferenceStatus = when {
+        inference.isRunning -> "Generating"
+        inference.savedPairs > 0 -> "${inference.savedPairs} pairs"
+        inference.modelLoaded -> "Model loaded"
+        else -> "Ready"
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = Color(0xFFF7FAFF),
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(18.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Demo Workbench", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = selectedRun,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Text(
-                    text = "No run folder loaded yet. Launch a demo or select an existing run directory.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp)
+                    text = runner.status.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = nativeRunnerColor(runner.status),
+                    modifier = Modifier
+                        .background(nativeRunnerColor(runner.status).copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 5.dp)
                 )
             }
-        }
 
-        items(runs) { run ->
-            val selected = run.id == selectedRunId
-            val compared = run.id == compareRunId
-
-            val accentColor = when {
-                selected -> Color(0xFF007AFF)   // iOS blue  — primary
-                compared -> Color(0xFFAF52DE)   // iOS purple — compare
-                else     -> Color(0xFFD1D1D6)   // iOS gray   — inactive
-            }
-            val cardBg = when {
-                selected -> Color(0xFFEFF6FF)
-                compared -> Color(0xFFF7EEFF)
-                else     -> Color(0xFFF8F9FB)
-            }
-            val (badge, badgeColor) = inferModelBadge(run.name)
-            val hasRss     = run.rssCsvUri     != null
-            val hasMetrics = run.metricsNdjsonUri != null
-
-            Card(
-                colors    = CardDefaults.cardColors(containerColor = cardBg),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                shape     = RoundedCornerShape(18.dp)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
             ) {
-                Row(
+                Button(
+                    onClick = onPickDirectory,
+                    enabled = !isTraining,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(IntrinsicSize.Min)
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
                 ) {
-                    // ── Colored left accent strip ──────────────────────────
-                    Box(
-                        modifier = Modifier
-                            .width(5.dp)
-                            .fillMaxHeight()
-                            .background(
-                                accentColor,
-                                RoundedCornerShape(topStart = 18.dp, bottomStart = 18.dp)
-                            )
-                    )
-
-                    // ── Card content ───────────────────────────────────────
-                    Column(
-                        modifier = Modifier
-                            .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        // Run name + model badge
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text     = run.name,
-                                style    = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            Text(
-                                text     = badge,
-                                style    = MaterialTheme.typography.labelMedium,
-                                color    = badgeColor,
-                                modifier = Modifier
-                                    .background(badgeColor.copy(alpha = 0.14f), RoundedCornerShape(8.dp))
-                                    .padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
-
-                        // Timestamp + optional file-type pills
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text  = "Updated ${formatTime(run.lastModifiedMs)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (hasRss) {
-                                Text(
-                                    text  = "RSS",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFFAF52DE),
-                                    modifier = Modifier
-                                        .background(Color(0xFFAF52DE).copy(alpha = 0.10f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
-                            if (hasMetrics) {
-                                Text(
-                                    text  = "NDJSON",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF34C759),
-                                    modifier = Modifier
-                                        .background(Color(0xFF34C759).copy(alpha = 0.10f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-
-                        // Action buttons row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            TextButton(
-                                onClick  = { onSelect(run.id) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .background(
-                                        if (selected) Color(0xFF007AFF).copy(alpha = 0.10f)
-                                        else Color.Transparent,
-                                        RoundedCornerShape(10.dp)
-                                    )
-                            ) {
-                                Text(
-                                    if (selected) "● Primary" else "Set Primary",
-                                    color = Color(0xFF007AFF)
-                                )
-                            }
-                            TextButton(
-                                onClick  = { onSelectCompare(run.id) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .background(
-                                        if (compared) Color(0xFFAF52DE).copy(alpha = 0.10f)
-                                        else Color.Transparent,
-                                        RoundedCornerShape(10.dp)
-                                    )
-                            ) {
-                                Text(
-                                    if (compared) "● Compare" else "Set Compare",
-                                    color = Color(0xFFAF52DE)
-                                )
-                            }
-                        }
-                    }
+                    Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Select Runs", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                OutlinedButton(
+                    onClick = onEnableDemo,
+                    enabled = !isTraining,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                ) {
+                    Text("Load Demo", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                OutlinedButton(
+                    onClick = onEnableDpoTest,
+                    enabled = !isTraining,
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                ) {
+                    Text("DPO Test", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                MiniMetricChip(
+                    label = "Inference",
+                    value = inferenceStatus,
+                    accent = if (inference.savedPairs > 0) NeonGreen else NeonBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Train Data",
+                    value = runner.trainingSourceLabel,
+                    accent = if (runner.trainingSourceLabel.contains("Qwen", ignoreCase = true)) NeonGreen else RssColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Step",
+                    value = lastMetric?.let { "${it.step}/${it.totalSteps ?: "?"}" } ?: "N/A",
+                    accent = LrColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Loss",
+                    value = lastMetric?.loss?.let { format3(it) } ?: "N/A",
+                    accent = LossColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Reward",
+                    value = lastMetric?.rewardAccuracy?.let { format3(it) } ?: "N/A",
+                    accent = NeonGreen,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Compare",
+                    value = compareRun,
+                    accent = RssColor,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
@@ -1995,6 +2019,20 @@ private fun NativeInferenceCard(
                     }
                 }
             }
+            state.feedbackStatus?.takeIf { it.isNotBlank() }?.let { message ->
+                Surface(
+                    color = NeonGreen.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = message,
+                        modifier = Modifier.padding(12.dp),
+                        color = NeonGreen,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
             state.lastChosenLabel?.let {
                 Text(
                     text = "Last preference: $it",
@@ -2040,8 +2078,25 @@ private fun NativeInferenceCard(
                 }
             }
 
+            if (state.debugLines.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Inference Logs",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    InferenceDebugLog(
+                        lines = state.debugLines,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 96.dp, max = 180.dp)
+                    )
+                }
+            }
+
             val a = state.candidateA
             val b = state.candidateB
+            val preferenceSaved = state.lastChosenLabel != null
             if (!a.isNullOrBlank() || !b.isNullOrBlank()) {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2051,14 +2106,16 @@ private fun NativeInferenceCard(
                     CandidatePreferenceBlock(
                         label = "A",
                         text = a ?: "",
-                        enabled = !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        enabled = !preferenceSaved && !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        selected = state.lastChosenLabel == "A",
                         modifier = Modifier.weight(1f),
                         onChoose = { onChooseCandidate("A") }
                     )
                     CandidatePreferenceBlock(
                         label = "B",
                         text = b ?: "",
-                        enabled = !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        enabled = !preferenceSaved && !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        selected = state.lastChosenLabel == "B",
                         modifier = Modifier.weight(1f),
                         onChoose = { onChooseCandidate("B") }
                     )
@@ -2069,17 +2126,43 @@ private fun NativeInferenceCard(
 }
 
 @Composable
+private fun InferenceDebugLog(
+    lines: List<String>,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xFF101820), RoundedCornerShape(12.dp))
+            .border(1.dp, Color(0xFF243447), RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        lines.takeLast(6).forEachIndexed { index, line ->
+            Text(
+                text = "${index + 1}. $line",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFFE6F1FF),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 private fun CandidatePreferenceBlock(
     label: String,
     text: String,
     enabled: Boolean,
+    selected: Boolean,
     modifier: Modifier = Modifier,
     onChoose: () -> Unit
 ) {
+    val borderColor = if (selected) NeonGreen else Color(0xFFDDE2EC)
     Column(
         modifier = modifier
             .background(Color.White, RoundedCornerShape(14.dp))
-            .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(14.dp))
+            .border(if (selected) 2.dp else 1.dp, borderColor, RoundedCornerShape(14.dp))
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -2100,7 +2183,7 @@ private fun CandidatePreferenceBlock(
             enabled = enabled,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Prefer $label")
+            Text(if (selected) "Saved $label" else "Prefer $label")
         }
     }
 }
@@ -2406,11 +2489,11 @@ private fun nativeRunnerColor(status: NativeDemoRunStatus): Color {
 
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
-        DashboardTab.OVERVIEW -> "Home"
+        DashboardTab.OVERVIEW -> "Summary"
         DashboardTab.TRAINING -> "Train"
         DashboardTab.COMPARISON -> "Versus"
         DashboardTab.LOGS -> "Logs"
-        DashboardTab.EXPERIMENTS -> "Runs"
+        DashboardTab.EXPERIMENTS -> "Demo"
     }
 }
 

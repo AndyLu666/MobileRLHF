@@ -174,12 +174,14 @@ data class NativeInferenceState(
     val savedPairs: Int = 0,
     val feedbackJsonlPath: String? = null,
     val lastChosenLabel: String? = null,
+    val feedbackStatus: String? = null,
+    val debugLines: List<String> = listOf("Ready. Generate A/B, choose a response, then train."),
     val error: String? = null
 )
 
 data class DashboardUiState(
     val selectedRootUri: Uri? = null,
-    val activeTab: DashboardTab = DashboardTab.OVERVIEW,
+    val activeTab: DashboardTab = DashboardTab.EXPERIMENTS,
     val runHandles: List<RunHandle> = emptyList(),
     val selectedRunId: String? = null,
     val compareRunId: String? = null,
