@@ -116,7 +116,7 @@ def evaluate_dataset(path: Path, tokenizer, steps: int, lr: float, beta: float):
 
 
 def main():
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     tokenizer = SimpleCharTokenizer()
     beta = 0.1
     steps = 60

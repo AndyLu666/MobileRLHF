@@ -70,7 +70,7 @@ def summarize_gradients(model):
 
 
 def main():
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     data_path = repo_root / "review-stage" / "data" / "synthetic_dpo_smoke.jsonl"
     tokenizer = SimpleCharTokenizer()
     dataset = PreferenceDataset(str(data_path), tokenizer, seq_len=96)
