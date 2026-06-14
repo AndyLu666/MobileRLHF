@@ -74,7 +74,6 @@ check_no_archived_experiment_surface() {
       -path './*/build' -prune -o \
       -path './*/build-android' -prune -o \
       \( -path './operator/opt_ops' \
-         -o -path './pytorch_alignment' \
          -o -path './scripts/Finetune' \
          -o -path './scripts/onnx_lora' \
          -o -path './operator/finetune_ops/graph/test_safetensors_simple' \
@@ -100,6 +99,7 @@ check_large_source_files() {
       -not -path './.agents/*' \
       -not -path './.aris/*' \
       -not -path './.venv*/*' \
+      -not -path './pt_env/*' \
       -not -path './data/*' \
       -not -path './runs/*' \
       -not -path './pytorch_runs/*' \
@@ -155,6 +155,7 @@ check_no_generated_caches() {
       -path './Rubbish' -prune -o \
       -path './runs' -prune -o \
       -path './review-stage' -prune -o \
+      -path './pt_env' -prune -o \
       -name __pycache__ -type d -print
   )"
   if [ -n "$matches" ]; then

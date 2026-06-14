@@ -351,7 +351,7 @@ bash scripts/check_local_assets.sh
 Detailed layout and download examples are documented in
 [docs/MODEL_ASSETS.md](docs/MODEL_ASSETS.md).
 
-更多 PyTorch 对齐示例见 [pytorch_alignment/README.md](/Users/anakinju/DKU/MobileFineTuner/pytorch_alignment/README.md)。
+更多 PyTorch 对齐示例见 [pytorch_alignment/README.md](pytorch_alignment/README.md)。
 
 ## 测试怎么跑
 
@@ -674,4 +674,4 @@ cd android-visualizer
 
 ## License
 
-本项目采用 Apache 2.0 许可证，详见 [LICENSE](/Users/anakinju/DKU/MobileFineTuner/LICENSE)。
+本项目采用 Apache 2.0 许可证，详见 [LICENSE](LICENSE)。
