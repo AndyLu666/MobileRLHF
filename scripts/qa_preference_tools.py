@@ -31,6 +31,7 @@ class ToolStats:
     skipped_existing_rejected: int = 0
     skipped_generation_guard: int = 0
     skipped_judge_parse: int = 0
+    exported_pairs: int = 0
 
     def to_dict(self) -> Dict[str, int]:
         return {
@@ -41,6 +42,7 @@ class ToolStats:
             "skipped_existing_rejected": self.skipped_existing_rejected,
             "skipped_generation_guard": self.skipped_generation_guard,
             "skipped_judge_parse": self.skipped_judge_parse,
+            "exported_pairs": self.exported_pairs,
         }
 
 
@@ -218,7 +220,13 @@ class GoldAnswerJudge(AnswerJudge):
             return Judgment(False, 0.0, "missing gold answer", self.source)
         response_cmp = comparable_text(response)
         gold_cmp = comparable_text(gold)
-        is_correct = bool(response_cmp and gold_cmp and (response_cmp == gold_cmp or response_cmp in gold_cmp or gold_cmp in response_cmp))
+        is_correct = False
+        if response_cmp and gold_cmp:
+            if response_cmp == gold_cmp:
+                is_correct = True
+            else:
+                length_ratio = min(len(response_cmp), len(gold_cmp)) / max(len(response_cmp), len(gold_cmp))
+                is_correct = length_ratio >= 0.8 and SequenceMatcher(None, response_cmp, gold_cmp).ratio() >= 0.92
         return Judgment(
             is_correct=is_correct,
             confidence=1.0 if is_correct else 0.8,

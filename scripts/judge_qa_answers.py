@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from collections import defaultdict
 
 try:
     from qa_preference_tools import (
@@ -38,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="Input QA JSONL.")
     parser.add_argument("--output", required=True, help="Judged output JSONL.")
     parser.add_argument("--pair_output", default="", help="Optional DPO prompt/chosen/rejected JSONL.")
+    parser.add_argument("--max_pairs_per_prompt", type=int, default=1, help="Max grouped DPO pairs per prompt; 0 means all.")
     parser.add_argument("--backend", choices=["qwen", "gold", "fake"], default="gold")
     parser.add_argument("--mode", choices=["single", "pair", "gold"], default="single")
     parser.add_argument("--model_dir", default="", help="Local Qwen model/tokenizer directory for --backend qwen.")
@@ -77,6 +79,7 @@ def convert(args: argparse.Namespace) -> ToolStats:
 
     judge = build_judge(args)
     stats = ToolStats()
+    grouped = defaultdict(lambda: {"chosen": [], "rejected": []})
 
     pair_handle = pair_path.open("w", encoding="utf-8") if pair_path else None
     try:
@@ -136,6 +139,7 @@ def convert(args: argparse.Namespace) -> ToolStats:
                                 "meta": {"input_line": line_no},
                             },
                         )
+                        stats.exported_pairs += 1
                     elif rejected and judgment.is_correct:
                         write_jsonl_row(
                             pair_handle,
@@ -147,6 +151,46 @@ def convert(args: argparse.Namespace) -> ToolStats:
                                 "meta": {"input_line": line_no},
                             },
                         )
+                        stats.exported_pairs += 1
+                    else:
+                        branch = "chosen" if judgment.is_correct else "rejected"
+                        grouped[qa.prompt][branch].append(
+                            {
+                                "response": qa.response,
+                                "line_no": line_no,
+                                "confidence": judgment.confidence,
+                            }
+                        )
+            if pair_handle:
+                for prompt, bucket in grouped.items():
+                    chosen_rows = bucket["chosen"]
+                    rejected_rows = bucket["rejected"]
+                    if not chosen_rows or not rejected_rows:
+                        continue
+                    pair_count = 0
+                    for chosen_row in chosen_rows:
+                        for rejected_row in rejected_rows:
+                            if args.max_pairs_per_prompt and pair_count >= args.max_pairs_per_prompt:
+                                break
+                            write_jsonl_row(
+                                pair_handle,
+                                {
+                                    "prompt": prompt,
+                                    "chosen": chosen_row["response"],
+                                    "rejected": rejected_row["response"],
+                                    "source": f"{getattr(judge, 'source', 'answer_judge')}_grouped_pair",
+                                    "meta": {
+                                        "chosen_line": chosen_row["line_no"],
+                                        "rejected_line": rejected_row["line_no"],
+                                        "chosen_confidence": chosen_row["confidence"],
+                                        "rejected_confidence": rejected_row["confidence"],
+                                    },
+                                },
+                            )
+                            stats.exported_pairs += 1
+                            pair_count += 1
+                        if args.max_pairs_per_prompt and pair_count >= args.max_pairs_per_prompt:
+                            break
     finally:
         if pair_handle:
             pair_handle.close()

@@ -48,6 +48,7 @@ class QaPreferenceToolTest(unittest.TestCase):
             tmpdir = Path(tmp)
             input_path = tmpdir / "qa.jsonl"
             output_path = tmpdir / "judged.jsonl"
+            pair_path = tmpdir / "pairs.jsonl"
             input_path.write_text(
                 "\n".join(
                     [
@@ -57,6 +58,14 @@ class QaPreferenceToolTest(unittest.TestCase):
                         ),
                         json.dumps(
                             {"prompt": "地球是圆的还是方的？", "response": "方的", "gold": "圆的"},
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
+                            {"prompt": "水在标准大气压下多少摄氏度沸腾？", "response": "100 摄氏度", "gold": "100 摄氏度"},
+                            ensure_ascii=False,
+                        ),
+                        json.dumps(
+                            {"prompt": "水在标准大气压下多少摄氏度沸腾？", "response": "0 摄氏度", "gold": "100 摄氏度"},
                             ensure_ascii=False,
                         ),
                     ]
@@ -73,6 +82,8 @@ class QaPreferenceToolTest(unittest.TestCase):
                     str(input_path),
                     "--output",
                     str(output_path),
+                    "--pair_output",
+                    str(pair_path),
                     "--backend",
                     "gold",
                 ],
@@ -81,8 +92,16 @@ class QaPreferenceToolTest(unittest.TestCase):
             )
 
             rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual([row["label"] for row in rows], ["chosen", "unchosen"])
-            self.assertEqual([row["is_correct"] for row in rows], [True, False])
+            self.assertEqual([row["label"] for row in rows], ["chosen", "unchosen", "chosen", "unchosen"])
+            self.assertEqual([row["is_correct"] for row in rows], [True, False, True, False])
+
+            pairs = [json.loads(line) for line in pair_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(pairs), 2)
+            self.assertEqual(pairs[0]["prompt"], "地球是圆的还是方的？")
+            self.assertEqual(pairs[0]["chosen"], "圆的")
+            self.assertEqual(pairs[0]["rejected"], "方的")
+            self.assertEqual(pairs[1]["chosen"], "100 摄氏度")
+            self.assertEqual(pairs[1]["rejected"], "0 摄氏度")
 
 
 if __name__ == "__main__":

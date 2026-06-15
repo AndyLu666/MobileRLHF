@@ -165,8 +165,13 @@ for model-based judging.
 python3 scripts/judge_qa_answers.py \
   --input data/raw_qa/train.jsonl \
   --output data/judged/train.jsonl \
+  --pair_output data/preferences/from_judged_train.jsonl \
   --backend gold
 ```
+
+When `--pair_output` is set, judged rows with the same prompt are grouped so at
+least one correct response and one incorrect response can become a DPO
+`prompt/chosen/rejected` pair.
 
 ### `plot_loss_curve.py`
 
