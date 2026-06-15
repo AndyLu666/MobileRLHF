@@ -108,7 +108,19 @@ class BinaryFeedbackDataset(Dataset):
 
 def is_desirable_label(label) -> bool:
     if isinstance(label, str):
-        return label.lower() in {"1", "true", "yes", "desirable", "positive", "up", "like"}
+        return label.lower() in {
+            "1",
+            "true",
+            "yes",
+            "desirable",
+            "positive",
+            "up",
+            "like",
+            "chosen",
+            "correct",
+            "accepted",
+            "good",
+        }
     return bool(label)
 
 

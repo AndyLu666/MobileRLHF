@@ -7,10 +7,13 @@ from peft import LoraConfig, get_peft_model
 from transformers import GPT2Config, GPT2LMHeadModel
 
 from pytorch_alignment.dpo_utils import (
+    BinaryFeedbackDataset,
     PreferenceDataset,
+    binary_feedback_collate_batch,
     compute_dpo_batch_metrics,
     dpo_collate_batch,
     evaluate_dpo,
+    is_desirable_label,
 )
 
 
@@ -85,6 +88,27 @@ class DpoUtilsTest(unittest.TestCase):
         self.assertEqual(batch["chosen_input_ids"].shape, torch.Size([2, 64]))
         self.assertTrue(torch.any(batch["chosen_response_mask"] > 0))
         self.assertTrue(torch.any(batch["rejected_response_mask"] > 0))
+
+    def test_binary_feedback_dataset_accepts_judged_labels(self):
+        feedback_path = Path(self.tmpdir.name) / "feedback.jsonl"
+        feedback_path.write_text(
+            "\n".join(
+                [
+                    '{"prompt":"User: What is 2+2?\\nAssistant:","response":" 4","label":"chosen"}',
+                    '{"prompt":"User: What is 2+2?\\nAssistant:","response":" 5","label":"unchosen"}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertTrue(is_desirable_label("chosen"))
+        self.assertTrue(is_desirable_label("correct"))
+        self.assertFalse(is_desirable_label("unchosen"))
+        dataset = BinaryFeedbackDataset(str(feedback_path), self.tokenizer, seq_len=64)
+        self.assertEqual(len(dataset), 2)
+        batch = binary_feedback_collate_batch([dataset[0], dataset[1]])
+        self.assertEqual(batch["input_ids"].shape, torch.Size([2, 64]))
+        self.assertEqual(batch["label"].tolist(), [1.0, -1.0])
 
     def test_dpo_metrics_backward_and_eval(self):
         dataset = PreferenceDataset(str(self.data_path), self.tokenizer, seq_len=64)
