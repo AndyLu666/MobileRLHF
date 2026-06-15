@@ -24,6 +24,8 @@ scripts/
 ├── plot_loss_curve.py
 ├── prepare_arcc_jsonl.py
 ├── prepare_mcq_jsonl.py
+├── prepare_qa_dpo_jsonl.py
+├── judge_qa_answers.py
 ├── prepare_qnli_jsonl.py
 ├── pretokenize_wikitext2_gemma.py
 ├── run_training_real_assets.sh
@@ -138,6 +140,32 @@ directories. They do not download or bundle benchmark data into the source tree.
 python3 scripts/prepare_qnli_jsonl.py --help
 python3 scripts/prepare_mcq_jsonl.py --help
 python3 scripts/prepare_arcc_jsonl.py --help
+```
+
+`prepare_qa_dpo_jsonl.py` converts ordinary QA JSONL into DPO preference JSONL.
+It accepts prompt aliases such as `prompt`, `question`, or `instruction`, and
+answer aliases such as `response`, `answer`, or `chosen`.
+
+```bash
+python3 scripts/prepare_qa_dpo_jsonl.py \
+  --input data/raw_qa/train.jsonl \
+  --output data/preferences/train.jsonl \
+  --backend qwen \
+  --model_dir examples/qwen_lora_finetune/pretrained
+```
+
+The output schema is `prompt/chosen/rejected`, which matches the existing DPO
+dataset loader. For CI or local smoke tests, use `--backend fake`.
+
+`judge_qa_answers.py` labels QA responses as `chosen` or `unchosen`. Use
+`--backend gold` when a row includes a reference answer, or `--backend qwen`
+for model-based judging.
+
+```bash
+python3 scripts/judge_qa_answers.py \
+  --input data/raw_qa/train.jsonl \
+  --output data/judged/train.jsonl \
+  --backend gold
 ```
 
 ### `plot_loss_curve.py`
