@@ -273,7 +273,9 @@ class QwenAnswerJudge(AnswerJudge):
         gold_block = f"\nReference answer: {gold}" if gold else ""
         instruction = (
             "Judge whether the response correctly answers the question. "
-            "Return strict JSON only with keys is_correct, confidence, reason.\n\n"
+            "Focus on factual adequacy, not style. "
+            "Return strict JSON only with keys is_correct, confidence, reason. "
+            "Example: {\"is_correct\": true, \"confidence\": 0.7, \"reason\": \"answers the question\"}\n\n"
             f"Question: {prompt}\n"
             f"Response: {response}"
             f"{gold_block}\n"
@@ -291,7 +293,10 @@ class QwenAnswerJudge(AnswerJudge):
             )
         new_ids = output_ids[0, inputs["input_ids"].shape[-1] :]
         raw = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
-        return parse_judgment_json(raw, self.source)
+        try:
+            return parse_judgment_json(raw, self.source)
+        except ValueError:
+            return parse_judgment_text_fallback(raw, self.source)
 
 
 def parse_judgment_json(raw: str, source: str) -> Judgment:
@@ -308,6 +313,40 @@ def parse_judgment_json(raw: str, source: str) -> Judgment:
         is_correct=bool(data["is_correct"]),
         confidence=confidence,
         reason=reason,
+        source=source,
+        raw=raw,
+    )
+
+
+def parse_judgment_text_fallback(raw: str, source: str) -> Judgment:
+    text = raw.strip()
+    lowered = text.casefold()
+    negative_hits = sum(
+        marker in lowered
+        for marker in (
+            "incorrect",
+            "not correct",
+            "does not answer",
+            "doesn't answer",
+            "wrong",
+            "false",
+        )
+    )
+    positive_hits = sum(
+        marker in lowered
+        for marker in (
+            "is correct",
+            "correct answer",
+            "answers the question",
+            "true",
+        )
+    )
+    is_correct = positive_hits > negative_hits
+    reason = compact_text(text[:240]) if text else "qwen text fallback produced no explanation"
+    return Judgment(
+        is_correct=is_correct,
+        confidence=0.35,
+        reason=f"text fallback: {reason}",
         source=source,
         raw=raw,
     )

@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from scripts.qa_preference_tools import parse_judgment_text_fallback
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,6 +104,12 @@ class QaPreferenceToolTest(unittest.TestCase):
             self.assertEqual(pairs[0]["rejected"], "方的")
             self.assertEqual(pairs[1]["chosen"], "100 摄氏度")
             self.assertEqual(pairs[1]["rejected"], "0 摄氏度")
+
+    def test_qwen_judge_text_fallback(self):
+        good = parse_judgment_text_fallback("The response is correct and answers the question.", "qwen_answer_judge")
+        bad = parse_judgment_text_fallback("The response is incorrect and does not answer the question.", "qwen_answer_judge")
+        self.assertTrue(good.is_correct)
+        self.assertFalse(bad.is_correct)
 
 
 if __name__ == "__main__":
