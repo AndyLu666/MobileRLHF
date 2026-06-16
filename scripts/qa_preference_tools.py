@@ -113,6 +113,16 @@ def too_similar(left: str, right: str, threshold: float = 0.85) -> bool:
     return SequenceMatcher(None, left_cmp, right_cmp).ratio() >= threshold
 
 
+def leaks_answer(candidate: str, answer: str) -> bool:
+    candidate_cmp = comparable_text(candidate)
+    answer_cmp = comparable_text(answer)
+    if not candidate_cmp or not answer_cmp:
+        return True
+    if len(answer_cmp) <= 2:
+        return answer_cmp in candidate_cmp
+    return answer_cmp in candidate_cmp or candidate_cmp in answer_cmp
+
+
 class NegativeGenerator:
     source = "negative_generator"
 
@@ -168,12 +178,14 @@ class QwenNegativeGenerator(NegativeGenerator):
 
     def generate(self, prompt: str, chosen: str) -> str:
         instruction = (
-            "You create rejected answers for DPO training. "
-            "Given a question and the correct answer, output one concise answer "
-            "that is clearly incorrect or low quality. Do not explain.\n\n"
+            "Create one rejected answer for preference training.\n"
+            "The rejected answer must be factually wrong or clearly low quality.\n"
+            "Do not include the correct answer. Do not explain. Do not add markdown.\n"
+            "Return exactly one JSON object with this schema: "
+            "{\"rejected\": \"short wrong answer\"}\n\n"
             f"Question: {prompt}\n"
-            f"Correct answer: {chosen}\n"
-            "Rejected answer:"
+            f"Correct answer to avoid: {chosen}\n"
+            "JSON:"
         )
         inputs = self.tokenizer(instruction, return_tensors="pt").to(self.device)
         with self.torch.no_grad():
@@ -186,7 +198,8 @@ class QwenNegativeGenerator(NegativeGenerator):
                 pad_token_id=self.tokenizer.eos_token_id,
             )
         new_ids = output_ids[0, inputs["input_ids"].shape[-1] :]
-        return self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+        raw = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+        return clean_rejected_answer(raw)
 
 
 @dataclass
@@ -300,16 +313,30 @@ class QwenAnswerJudge(AnswerJudge):
         new_ids = output_ids[0, inputs["input_ids"].shape[-1] :]
         raw = self.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
         try:
-            return parse_judgment_json(raw, self.source)
+            judgment = parse_judgment_json(raw, self.source)
         except ValueError:
-            return parse_judgment_text_fallback(raw, self.source)
+            judgment = parse_judgment_text_fallback(raw, self.source)
+        if gold:
+            gold_judgment = GoldAnswerJudge().judge(prompt, response, gold)
+            if gold_judgment.is_correct != judgment.is_correct:
+                return Judgment(
+                    is_correct=gold_judgment.is_correct,
+                    confidence=max(gold_judgment.confidence, judgment.confidence),
+                    reason=(
+                        "gold sanity override: "
+                        f"{gold_judgment.reason}; qwen_reason={judgment.reason}"
+                    ),
+                    source=f"{self.source}_gold_sanity",
+                    raw=raw,
+                )
+        return judgment
 
 
 def parse_judgment_json(raw: str, source: str) -> Judgment:
-    match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-    if not match:
+    obj = extract_first_json_object(raw)
+    if obj is None:
         raise ValueError("judge output did not contain a JSON object")
-    data = json.loads(match.group(0))
+    data = json.loads(obj)
     if "is_correct" not in data:
         raise ValueError("judge JSON missing is_correct")
     confidence = float(data.get("confidence", 0.0))
@@ -322,6 +349,64 @@ def parse_judgment_json(raw: str, source: str) -> Judgment:
         source=source,
         raw=raw,
     )
+
+
+def extract_first_json_object(raw: str) -> Optional[str]:
+    start = raw.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for idx in range(start, len(raw)):
+        ch = raw[idx]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return raw[start : idx + 1]
+    return None
+
+
+def clean_rejected_answer(raw: str) -> str:
+    obj = extract_first_json_object(raw)
+    if obj:
+        try:
+            data = json.loads(obj)
+            value = compact_text(data.get("rejected", ""))
+            if value:
+                return value
+        except json.JSONDecodeError:
+            pass
+
+    text = raw.strip()
+    for marker in (
+        "\nAnswer:",
+        "\nCorrect answer:",
+        "\nExplanation:",
+        "\nThe correct answer",
+        "\nThe answer",
+        "\nYou did not",
+        "\nOkay,",
+        "\nLet's",
+    ):
+        pos = text.find(marker)
+        if pos >= 0:
+            text = text[:pos]
+    text = text.strip().strip('"').strip()
+    return compact_text(text)
 
 
 def parse_judgment_text_fallback(raw: str, source: str) -> Judgment:

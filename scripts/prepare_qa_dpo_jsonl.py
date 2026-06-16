@@ -10,6 +10,7 @@ try:
         FakeNegativeGenerator,
         QwenNegativeGenerator,
         ToolStats,
+        leaks_answer,
         iter_jsonl,
         normalize_qa_row,
         too_similar,
@@ -24,6 +25,7 @@ except ImportError:
         FakeNegativeGenerator,
         QwenNegativeGenerator,
         ToolStats,
+        leaks_answer,
         iter_jsonl,
         normalize_qa_row,
         too_similar,
@@ -91,7 +93,7 @@ def convert(args: argparse.Namespace) -> ToolStats:
             rejected = str(existing_rejected).strip() if existing_rejected and not args.overwrite_rejected else ""
             if not rejected:
                 rejected = generator.generate(qa.prompt, qa.response).strip()
-            if too_similar(rejected, qa.response, threshold=args.similarity_threshold):
+            if too_similar(rejected, qa.response, threshold=args.similarity_threshold) or leaks_answer(rejected, qa.response):
                 stats.skipped_generation_guard += 1
                 continue
             write_jsonl_row(

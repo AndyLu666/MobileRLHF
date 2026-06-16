@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.qa_preference_tools import parse_judgment_text_fallback
+from scripts.qa_preference_tools import clean_rejected_answer, leaks_answer, parse_judgment_json, parse_judgment_text_fallback
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +111,22 @@ class QaPreferenceToolTest(unittest.TestCase):
         bad = parse_judgment_text_fallback("The response is incorrect and does not answer the question.", "qwen_answer_judge")
         self.assertTrue(good.is_correct)
         self.assertFalse(bad.is_correct)
+
+    def test_qwen_json_and_rejected_cleanup(self):
+        judgment = parse_judgment_json(
+            '{"is_correct": false, "confidence": 0.8, "reason": "wrong"}\\nAnswer:\\n{"is_correct": true}',
+            "qwen_answer_judge",
+        )
+        self.assertFalse(judgment.is_correct)
+        rejected = clean_rejected_answer(
+            '{"rejected": "Lyon."}\\nAnswer:\\nParis is the correct answer.'
+        )
+        self.assertEqual(rejected, "Lyon.")
+        rejected = clean_rejected_answer("17 plus 28 is 35.\nAnswer:\n45 is correct.")
+        self.assertEqual(rejected, "17 plus 28 is 35.")
+        self.assertTrue(leaks_answer("17+28=45", "45."))
+        self.assertTrue(leaks_answer("It converts text into token IDs.", "It converts text into token IDs."))
+        self.assertFalse(leaks_answer("Lyon.", "Paris."))
 
     def test_unique_prompts_keep_single_feedback_without_pairs(self):
         with tempfile.TemporaryDirectory() as tmp:
