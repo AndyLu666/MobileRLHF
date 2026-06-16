@@ -96,6 +96,7 @@ class QaPreferenceToolTest(unittest.TestCase):
             rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["label"] for row in rows], ["chosen", "unchosen", "chosen", "unchosen"])
             self.assertEqual([row["is_correct"] for row in rows], [True, False, True, False])
+            self.assertTrue(all(row["training_format"] == "single_feedback" for row in rows))
 
             pairs = [json.loads(line) for line in pair_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(pairs), 2)
@@ -110,6 +111,46 @@ class QaPreferenceToolTest(unittest.TestCase):
         bad = parse_judgment_text_fallback("The response is incorrect and does not answer the question.", "qwen_answer_judge")
         self.assertTrue(good.is_correct)
         self.assertFalse(bad.is_correct)
+
+    def test_unique_prompts_keep_single_feedback_without_pairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            input_path = tmpdir / "unique.jsonl"
+            output_path = tmpdir / "judged.jsonl"
+            pair_path = tmpdir / "pairs.jsonl"
+            input_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"prompt": "What does DNS do?", "response": "It maps names to addresses.", "gold": "It maps names to addresses."}),
+                        json.dumps({"prompt": "What is binary search?", "response": "It checks random items.", "gold": "It halves a sorted search space."}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "scripts/judge_qa_answers.py"),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--pair_output",
+                    str(pair_path),
+                    "--backend",
+                    "gold",
+                ],
+                check=True,
+                cwd=REPO_ROOT,
+            )
+
+            rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+            pairs = [json.loads(line) for line in pair_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(pairs), 0)
+            self.assertEqual([row["training_format"] for row in rows], ["single_feedback", "single_feedback"])
 
 
 if __name__ == "__main__":

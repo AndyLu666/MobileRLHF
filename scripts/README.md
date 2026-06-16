@@ -157,8 +157,10 @@ python3 scripts/prepare_qa_dpo_jsonl.py \
 The output schema is `prompt/chosen/rejected`, which matches the existing DPO
 dataset loader. For CI or local smoke tests, use `--backend fake`.
 
-`judge_qa_answers.py` labels QA responses as `chosen` or `unchosen`. Use
-`--backend gold` when a row includes a reference answer, or `--backend qwen`
+`judge_qa_answers.py` labels QA responses as `chosen` or `unchosen`. Its main
+output is single-sided preference feedback (`prompt/response/label`) for
+BinaryFeedback/KTO-style training, so rows do not need to share the same prompt.
+Use `--backend gold` when a row includes a reference answer, or `--backend qwen`
 for model-based judging.
 
 ```bash
@@ -171,7 +173,9 @@ python3 scripts/judge_qa_answers.py \
 
 When `--pair_output` is set, judged rows with the same prompt are grouped so at
 least one correct response and one incorrect response can become a DPO
-`prompt/chosen/rejected` pair.
+`prompt/chosen/rejected` pair. This pair export is optional and may be empty for
+realistic single-response QA datasets with unique prompts; the judged
+single-feedback output is still usable.
 
 ### `plot_loss_curve.py`
 

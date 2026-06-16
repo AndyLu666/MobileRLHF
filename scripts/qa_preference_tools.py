@@ -32,6 +32,9 @@ class ToolStats:
     skipped_generation_guard: int = 0
     skipped_judge_parse: int = 0
     exported_pairs: int = 0
+    chosen_labels: int = 0
+    unchosen_labels: int = 0
+    unknown_labels: int = 0
 
     def to_dict(self) -> Dict[str, int]:
         return {
@@ -43,6 +46,9 @@ class ToolStats:
             "skipped_generation_guard": self.skipped_generation_guard,
             "skipped_judge_parse": self.skipped_judge_parse,
             "exported_pairs": self.exported_pairs,
+            "chosen_labels": self.chosen_labels,
+            "unchosen_labels": self.unchosen_labels,
+            "unknown_labels": self.unknown_labels,
         }
 
 

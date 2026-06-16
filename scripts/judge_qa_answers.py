@@ -35,7 +35,13 @@ except ImportError:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Judge QA responses as chosen or unchosen.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Judge QA responses as single-sided preference feedback. The main "
+            "output is prompt/response/label JSONL for BinaryFeedback/KTO-style "
+            "training; --pair_output is an optional pairwise-DPO export."
+        )
+    )
     parser.add_argument("--input", required=True, help="Input QA JSONL.")
     parser.add_argument("--output", required=True, help="Judged output JSONL.")
     parser.add_argument("--pair_output", default="", help="Optional DPO prompt/chosen/rejected JSONL.")
@@ -105,9 +111,11 @@ def convert(args: argparse.Namespace) -> ToolStats:
                             "confidence": 0.0,
                             "reason": f"judge failed: {exc}",
                             "source": getattr(judge, "source", "answer_judge"),
+                            "training_format": "single_feedback",
                             "meta": {"input_line": line_no, "backend": args.backend},
                         },
                     )
+                    stats.unknown_labels += 1
                     continue
 
                 judged_row = {
@@ -118,12 +126,17 @@ def convert(args: argparse.Namespace) -> ToolStats:
                     "confidence": judgment.confidence,
                     "reason": judgment.reason,
                     "source": judgment.source,
+                    "training_format": "single_feedback",
                     "meta": {"input_line": line_no, "backend": args.backend, "mode": args.mode},
                 }
                 if judgment.raw:
                     judged_row["meta"]["raw_judge_output"] = judgment.raw
                 write_jsonl_row(out, judged_row)
                 stats.kept += 1
+                if judgment.is_correct:
+                    stats.chosen_labels += 1
+                else:
+                    stats.unchosen_labels += 1
 
                 if pair_handle:
                     rejected = pick_text(row, ("rejected", "unchosen", "bad_response", "response_b"))
