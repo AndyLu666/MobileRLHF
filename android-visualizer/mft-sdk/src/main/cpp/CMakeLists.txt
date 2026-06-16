@@ -37,3 +37,11 @@ target_link_libraries(mobilefinetuner_jni
         operators
         ${log_lib}
 )
+
+if(ANDROID)
+    foreach(target_name operators mobilefinetuner_jni)
+        if(TARGET ${target_name})
+            target_compile_options(${target_name} PRIVATE -O3 -DNDEBUG)
+        endif()
+    endforeach()
+endif()

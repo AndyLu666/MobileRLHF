@@ -159,10 +159,10 @@ data class NativeDemoRunnerState(
 
 data class NativeInferenceState(
     val modelDir: String = "/data/local/tmp/mft_qwen3",
-    val prompt: String = "How can I maintain my fitness routine while traveling for work?",
-    val maxNewTokens: Int = 16,
-    val temperature: Double = 0.7,
-    val topP: Double = 0.9,
+    val prompt: String = "What is 1+1? Answer with only the result.",
+    val maxNewTokens: Int = 8,
+    val temperature: Double = 0.0,
+    val topP: Double = 1.0,
     val modelLoaded: Boolean = false,
     val isRunning: Boolean = false,
     val output: String? = null,
@@ -175,7 +175,7 @@ data class NativeInferenceState(
     val feedbackJsonlPath: String? = null,
     val lastChosenLabel: String? = null,
     val feedbackStatus: String? = null,
-    val debugLines: List<String> = listOf("Ready. Generate A/B, choose a response, then train."),
+    val debugLines: List<String> = listOf("Ready. Use 8-16 tokens first on emulator, then increase."),
     val error: String? = null
 )
 

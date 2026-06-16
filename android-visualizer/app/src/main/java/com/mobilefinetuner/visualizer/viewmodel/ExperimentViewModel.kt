@@ -224,7 +224,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         val sanitized = state.copy(
             modelDir = modelDir,
             prompt = state.prompt,
-            maxNewTokens = state.maxNewTokens.coerceIn(1, 256),
+            maxNewTokens = state.maxNewTokens.coerceIn(1, 64),
             temperature = state.temperature.coerceIn(0.0, 2.0),
             topP = state.topP.coerceIn(0.05, 1.0),
             modelLoaded = modelDir == nativeInferenceModelDir && nativeInferenceSession != null,
@@ -258,7 +258,10 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 generateElapsedMs = null,
                 lastChosenLabel = null,
                 feedbackStatus = null,
-                debugLines = appendInferenceLog(request, "Single generation started."),
+                debugLines = appendInferenceLog(
+                    request,
+                    "Single generation queued: max=${request.maxNewTokens}, temp=${formatDemoValue("%.2f", request.temperature)}, topP=${formatDemoValue("%.2f", request.topP)}."
+                ),
                 error = null
             )
         )
@@ -269,17 +272,21 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             var generateMs = 0.0
             val result = runCatching {
                 val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
+                    updateNativeInferenceProgress("Using cached model session.")
                     nativeInferenceSession!!
                 } else {
                     closeNativeInferenceSession()
+                    updateNativeInferenceProgress("Opening model from ${request.modelDir}.")
                     val loadStartNs = System.nanoTime()
                     MobileFineTuner.open(request.modelDir).also { tuner ->
                         loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
                         nativeInferenceSession = tuner
                         nativeInferenceModelDir = request.modelDir
+                        updateNativeInferenceProgress("Model opened in ${formatDemoValue("%.1f", loadMs)} ms.")
                     }
                 }
                 val generateStartNs = System.nanoTime()
+                updateNativeInferenceProgress("Generating response 1/1 (${request.maxNewTokens} token max).")
                 session.generate(
                     request.prompt,
                     request.maxNewTokens,
@@ -296,6 +303,11 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             if (failure != null) {
                 closeNativeInferenceSession()
             }
+            val finalMessage = if (result.isSuccess) {
+                "Single generation finished in ${formatDemoValue("%.1f", elapsedMs)} ms."
+            } else {
+                "Single generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
+            }
             _uiState.value = _uiState.value.copy(
                 nativeInference = current.copy(
                     isRunning = false,
@@ -304,14 +316,8 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     elapsedMs = elapsedMs.takeIf { result.isSuccess },
                     loadElapsedMs = loadMs.takeIf { result.isSuccess },
                     generateElapsedMs = generateMs.takeIf { result.isSuccess },
-                    debugLines = appendInferenceLog(
-                        current,
-                        if (result.isSuccess) {
-                            "Single generation finished in ${formatDemoValue("%.1f", elapsedMs)} ms."
-                        } else {
-                            "Single generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
-                        }
-                    ),
+                    feedbackStatus = finalMessage,
+                    debugLines = appendInferenceLog(current, finalMessage),
                     error = failure?.message ?: failure?.javaClass?.simpleName
                 )
             )
@@ -357,19 +363,26 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             val startNs = System.nanoTime()
             var loadMs = 0.0
             var generateMs = 0.0
+            var candidateAMs = 0.0
+            var candidateBMs = 0.0
             val result = runCatching {
                 val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
+                    updateNativeInferenceProgress("Using cached model session.")
                     nativeInferenceSession!!
                 } else {
                     closeNativeInferenceSession()
+                    updateNativeInferenceProgress("Opening model from ${request.modelDir}.")
                     val loadStartNs = System.nanoTime()
                     MobileFineTuner.open(request.modelDir).also { tuner ->
                         loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
                         nativeInferenceSession = tuner
                         nativeInferenceModelDir = request.modelDir
+                        updateNativeInferenceProgress("Model opened in ${formatDemoValue("%.1f", loadMs)} ms.")
                     }
                 }
                 val generateStartNs = System.nanoTime()
+                updateNativeInferenceProgress("Generating candidate A (${request.maxNewTokens} token max).")
+                val candidateAStartNs = System.nanoTime()
                 val a = session.generate(
                     request.prompt,
                     request.maxNewTokens,
@@ -377,12 +390,21 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     request.topP.toFloat(),
                     System.currentTimeMillis()
                 )
+                candidateAMs = (System.nanoTime() - candidateAStartNs) / 1_000_000.0
+                updateNativeInferenceProgress(
+                    "Candidate A finished in ${formatDemoValue("%.1f", candidateAMs)} ms; generating candidate B."
+                )
+                val candidateBStartNs = System.nanoTime()
                 val b = session.generate(
                     request.prompt,
                     request.maxNewTokens,
                     request.temperature.toFloat(),
                     request.topP.toFloat(),
                     System.currentTimeMillis() + 104729L
+                )
+                candidateBMs = (System.nanoTime() - candidateBStartNs) / 1_000_000.0
+                updateNativeInferenceProgress(
+                    "Candidate B finished in ${formatDemoValue("%.1f", candidateBMs)} ms."
                 )
                 generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
                 a to b
@@ -394,6 +416,11 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 closeNativeInferenceSession()
             }
             val pair = result.getOrNull()
+            val finalMessage = if (result.isSuccess) {
+                "A/B generated in ${formatDemoValue("%.1f", elapsedMs)} ms (A ${formatDemoValue("%.1f", candidateAMs)} ms, B ${formatDemoValue("%.1f", candidateBMs)} ms). Choose A or B."
+            } else {
+                "A/B generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
+            }
             _uiState.value = _uiState.value.copy(
                 nativeInference = current.copy(
                     isRunning = false,
@@ -405,15 +432,8 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     loadElapsedMs = loadMs.takeIf { result.isSuccess },
                     generateElapsedMs = generateMs.takeIf { result.isSuccess },
                     feedbackJsonlPath = inferenceFeedbackJsonlFile().absolutePath,
-                    feedbackStatus = null,
-                    debugLines = appendInferenceLog(
-                        current,
-                        if (result.isSuccess) {
-                            "A/B generated in ${formatDemoValue("%.1f", elapsedMs)} ms. Choose A or B."
-                        } else {
-                            "A/B generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
-                        }
-                    ),
+                    feedbackStatus = finalMessage,
+                    debugLines = appendInferenceLog(current, finalMessage),
                     error = failure?.message ?: failure?.javaClass?.simpleName
                 )
             )
@@ -422,6 +442,15 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
     fun chooseNativeInferenceCandidate(label: String) {
         val state = _uiState.value.nativeInference
+        if (state.isRunning) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Generation is still running. Wait for both candidates before choosing.",
+                    debugLines = appendInferenceLog(state, "Preference tap ignored while generation is running.")
+                )
+            )
+            return
+        }
         if (state.lastChosenLabel != null) {
             _uiState.value = _uiState.value.copy(
                 nativeInference = state.copy(
@@ -431,10 +460,27 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             )
             return
         }
-        val a = state.candidateA?.takeIf { it.isNotBlank() } ?: return
-        val b = state.candidateB?.takeIf { it.isNotBlank() } ?: return
+        val a = state.candidateA?.takeIf { it.isNotBlank() }
+        val b = state.candidateB?.takeIf { it.isNotBlank() }
+        if (a == null || b == null) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Generate A/B first; both candidates must be available before saving feedback.",
+                    debugLines = appendInferenceLog(state, "Preference tap ignored because A/B candidates are incomplete.")
+                )
+            )
+            return
+        }
         val normalized = label.trim().uppercase(Locale.US)
-        if (normalized != "A" && normalized != "B") return
+        if (normalized != "A" && normalized != "B") {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Unknown preference label: $label.",
+                    debugLines = appendInferenceLog(state, "Preference tap ignored because label was invalid.")
+                )
+            )
+            return
+        }
 
         val prompt = FeedbackPrompt(
             prompt = state.prompt,
@@ -488,6 +534,16 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun appendInferenceLog(state: NativeInferenceState, message: String): List<String> {
         return (state.debugLines + message).takeLast(8)
+    }
+
+    private fun updateNativeInferenceProgress(message: String) {
+        val current = _uiState.value.nativeInference
+        _uiState.value = _uiState.value.copy(
+            nativeInference = current.copy(
+                feedbackStatus = message,
+                debugLines = appendInferenceLog(current, message)
+            )
+        )
     }
 
     private fun closeNativeInferenceSession() {

@@ -270,7 +270,7 @@ bool is_stop_token(int id, int eos) {
 std::string make_qwen_chat_prompt(const std::string& prompt) {
     return
         "<|im_start|>system\n"
-        "You are a careful health and fitness assistant. Give practical, safe, concise advice."
+        "You are a concise assistant. Answer directly in one short sentence."
         "<|im_end|>\n"
         "<|im_start|>user\n" +
         prompt +
