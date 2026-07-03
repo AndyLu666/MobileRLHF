@@ -70,7 +70,24 @@ public final class MobileFineTuner implements AutoCloseable {
                 config.learningRate,
                 config.weightDecay,
                 config.maxGradNorm,
-                config.ignoreIndex
+                config.ignoreIndex,
+                config.useStreamingLmLoss,
+                config.gradientAccumulationSteps
+        );
+    }
+
+    public void createDpoTrainer(DpoTrainerConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("config must not be null");
+        }
+        nativeCreateDpoTrainer(
+                requireOpen(),
+                config.learningRate,
+                config.weightDecay,
+                config.maxGradNorm,
+                config.beta,
+                config.useStreamingDpoLoss,
+                config.gradientAccumulationSteps
         );
     }
 
@@ -97,7 +114,105 @@ public final class MobileFineTuner implements AutoCloseable {
                 batchSize,
                 sequenceLength
         );
-        return new TrainStepResult((float) result[0], (int) result[1]);
+        return new TrainStepResult(
+                (float) result[0],
+                (int) result[1],
+                (int) result[2],
+                (float) result[3],
+                (int) result[4],
+                (int) result[5],
+                result[6] != 0.0
+        );
+    }
+
+    public TrainStepResult trainTextBatch(String[] texts, int sequenceLength) {
+        return trainTextBatch(texts, sequenceLength, false);
+    }
+
+    public TrainStepResult trainTextBatch(String[] texts, int sequenceLength, boolean appendEos) {
+        if (texts == null || texts.length == 0) {
+            throw new IllegalArgumentException("texts must contain at least one item");
+        }
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+        String[] copied = Arrays.copyOf(texts, texts.length);
+        for (String text : copied) {
+            if (text == null) {
+                throw new IllegalArgumentException("texts must not contain null entries");
+            }
+        }
+        double[] result = nativeTrainTextBatch(requireOpen(), copied, sequenceLength, appendEos);
+        return new TrainStepResult(
+                (float) result[0],
+                (int) result[1],
+                (int) result[2],
+                (float) result[3],
+                (int) result[4],
+                (int) result[5],
+                result[6] != 0.0
+        );
+    }
+
+    public PreferenceStepResult trainPreferenceBatch(
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            float[] refChosenLogps,
+            float[] refRejectedLogps,
+            int sequenceLength
+    ) {
+        return trainPreferenceBatch(
+                prompts,
+                chosen,
+                rejected,
+                refChosenLogps,
+                refRejectedLogps,
+                sequenceLength,
+                false
+        );
+    }
+
+    public PreferenceStepResult trainPreferenceBatch(
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            float[] refChosenLogps,
+            float[] refRejectedLogps,
+            int sequenceLength,
+            boolean appendEosToResponse
+    ) {
+        int batchSize = requireSameStringBatch(prompts, chosen, rejected);
+        requireLength(refChosenLogps, batchSize, "refChosenLogps");
+        requireLength(refRejectedLogps, batchSize, "refRejectedLogps");
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+
+        double[] result = nativeTrainPreferenceBatch(
+                requireOpen(),
+                Arrays.copyOf(prompts, prompts.length),
+                Arrays.copyOf(chosen, chosen.length),
+                Arrays.copyOf(rejected, rejected.length),
+                Arrays.copyOf(refChosenLogps, refChosenLogps.length),
+                Arrays.copyOf(refRejectedLogps, refRejectedLogps.length),
+                sequenceLength,
+                appendEosToResponse
+        );
+        return new PreferenceStepResult(
+                (float) result[0],
+                (int) result[1],
+                (int) result[2],
+                (int) result[3],
+                (float) result[4],
+                (float) result[5],
+                (float) result[6],
+                (float) result[7],
+                (float) result[8],
+                (int) result[9],
+                (int) result[10],
+                result[11] != 0.0
+        );
     }
 
     public int trainableTensorCount() {
@@ -159,6 +274,24 @@ public final class MobileFineTuner implements AutoCloseable {
         }
     }
 
+    private static int requireSameStringBatch(String[] prompts, String[] chosen, String[] rejected) {
+        if (prompts == null || chosen == null || rejected == null) {
+            throw new IllegalArgumentException("preference text arrays must not be null");
+        }
+        if (prompts.length == 0) {
+            throw new IllegalArgumentException("preference batch must contain at least one pair");
+        }
+        if (chosen.length != prompts.length || rejected.length != prompts.length) {
+            throw new IllegalArgumentException("preference text arrays must have the same length");
+        }
+        for (int i = 0; i < prompts.length; ++i) {
+            if (prompts[i] == null || chosen[i] == null || rejected[i] == null) {
+                throw new IllegalArgumentException("preference text arrays must not contain null entries");
+            }
+        }
+        return prompts.length;
+    }
+
     private static native String nativeBuildInfo();
     private static native double[] nativeSelfTest(String workingDir);
     private static native long nativeCreate(String modelDir, boolean loadWeights);
@@ -175,7 +308,18 @@ public final class MobileFineTuner implements AutoCloseable {
             float learningRate,
             float weightDecay,
             float maxGradNorm,
-            int ignoreIndex
+            int ignoreIndex,
+            boolean useStreamingLmLoss,
+            int gradientAccumulationSteps
+    );
+    private static native void nativeCreateDpoTrainer(
+            long handle,
+            float learningRate,
+            float weightDecay,
+            float maxGradNorm,
+            float beta,
+            boolean useStreamingDpoLoss,
+            int gradientAccumulationSteps
     );
     private static native double[] nativeTrainStep(
             long handle,
@@ -184,6 +328,22 @@ public final class MobileFineTuner implements AutoCloseable {
             int[] labels,
             int batchSize,
             int sequenceLength
+    );
+    private static native double[] nativeTrainTextBatch(
+            long handle,
+            String[] texts,
+            int sequenceLength,
+            boolean appendEos
+    );
+    private static native double[] nativeTrainPreferenceBatch(
+            long handle,
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            float[] refChosenLogps,
+            float[] refRejectedLogps,
+            int sequenceLength,
+            boolean appendEosToResponse
     );
     private static native int nativeTrainableTensorCount(long handle);
     private static native String nativeGenerate(
@@ -233,13 +393,26 @@ public final class MobileFineTuner implements AutoCloseable {
         }
     }
 
-    public static final class TrainerConfig {
+    public static final class DpoTrainerConfig {
         public final float learningRate;
         public final float weightDecay;
         public final float maxGradNorm;
-        public final int ignoreIndex;
+        public final float beta;
+        public final boolean useStreamingDpoLoss;
+        public final int gradientAccumulationSteps;
 
-        public TrainerConfig(float learningRate, float weightDecay, float maxGradNorm, int ignoreIndex) {
+        public DpoTrainerConfig(float learningRate, float weightDecay, float maxGradNorm, float beta) {
+            this(learningRate, weightDecay, maxGradNorm, beta, true, 1);
+        }
+
+        public DpoTrainerConfig(
+                float learningRate,
+                float weightDecay,
+                float maxGradNorm,
+                float beta,
+                boolean useStreamingDpoLoss,
+                int gradientAccumulationSteps
+        ) {
             if (learningRate <= 0.0f) {
                 throw new IllegalArgumentException("learningRate must be positive");
             }
@@ -249,10 +422,80 @@ public final class MobileFineTuner implements AutoCloseable {
             if (maxGradNorm <= 0.0f) {
                 throw new IllegalArgumentException("maxGradNorm must be positive");
             }
+            if (beta <= 0.0f) {
+                throw new IllegalArgumentException("beta must be positive");
+            }
+            if (gradientAccumulationSteps <= 0) {
+                throw new IllegalArgumentException("gradientAccumulationSteps must be positive");
+            }
+            this.learningRate = learningRate;
+            this.weightDecay = weightDecay;
+            this.maxGradNorm = maxGradNorm;
+            this.beta = beta;
+            this.useStreamingDpoLoss = useStreamingDpoLoss;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
+        }
+
+        public static DpoTrainerConfig defaults() {
+            return new DpoTrainerConfig(2e-4f, 0.0f, 1.0f, 0.1f);
+        }
+    }
+
+    public static final class TrainerConfig {
+        public final float learningRate;
+        public final float weightDecay;
+        public final float maxGradNorm;
+        public final int ignoreIndex;
+        public final boolean useStreamingLmLoss;
+        public final int gradientAccumulationSteps;
+
+        public TrainerConfig(float learningRate, float weightDecay, float maxGradNorm, int ignoreIndex) {
+            this(learningRate, weightDecay, maxGradNorm, ignoreIndex, true);
+        }
+
+        public TrainerConfig(
+                float learningRate,
+                float weightDecay,
+                float maxGradNorm,
+                int ignoreIndex,
+                boolean useStreamingLmLoss
+        ) {
+            this(
+                    learningRate,
+                    weightDecay,
+                    maxGradNorm,
+                    ignoreIndex,
+                    useStreamingLmLoss,
+                    1
+            );
+        }
+
+        public TrainerConfig(
+                float learningRate,
+                float weightDecay,
+                float maxGradNorm,
+                int ignoreIndex,
+                boolean useStreamingLmLoss,
+                int gradientAccumulationSteps
+        ) {
+            if (learningRate <= 0.0f) {
+                throw new IllegalArgumentException("learningRate must be positive");
+            }
+            if (weightDecay < 0.0f) {
+                throw new IllegalArgumentException("weightDecay must be non-negative");
+            }
+            if (maxGradNorm <= 0.0f) {
+                throw new IllegalArgumentException("maxGradNorm must be positive");
+            }
+            if (gradientAccumulationSteps <= 0) {
+                throw new IllegalArgumentException("gradientAccumulationSteps must be positive");
+            }
             this.learningRate = learningRate;
             this.weightDecay = weightDecay;
             this.maxGradNorm = maxGradNorm;
             this.ignoreIndex = ignoreIndex;
+            this.useStreamingLmLoss = useStreamingLmLoss;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
         }
 
         public static TrainerConfig defaults() {
@@ -260,13 +503,74 @@ public final class MobileFineTuner implements AutoCloseable {
         }
     }
 
+    public static final class PreferenceStepResult {
+        public final float loss;
+        public final int trainableTensorCount;
+        public final int pairCount;
+        public final int validResponseTokenCount;
+        public final float accumulatedLoss;
+        public final float chosenReward;
+        public final float rejectedReward;
+        public final float rewardMargin;
+        public final float rewardAccuracy;
+        public final int accumulationStep;
+        public final int gradientAccumulationSteps;
+        public final boolean optimizerStep;
+
+        private PreferenceStepResult(
+                float loss,
+                int trainableTensorCount,
+                int pairCount,
+                int validResponseTokenCount,
+                float accumulatedLoss,
+                float chosenReward,
+                float rejectedReward,
+                float rewardMargin,
+                float rewardAccuracy,
+                int accumulationStep,
+                int gradientAccumulationSteps,
+                boolean optimizerStep
+        ) {
+            this.loss = loss;
+            this.trainableTensorCount = trainableTensorCount;
+            this.pairCount = pairCount;
+            this.validResponseTokenCount = validResponseTokenCount;
+            this.accumulatedLoss = accumulatedLoss;
+            this.chosenReward = chosenReward;
+            this.rejectedReward = rejectedReward;
+            this.rewardMargin = rewardMargin;
+            this.rewardAccuracy = rewardAccuracy;
+            this.accumulationStep = accumulationStep;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
+            this.optimizerStep = optimizerStep;
+        }
+    }
+
     public static final class TrainStepResult {
         public final float loss;
         public final int trainableTensorCount;
+        public final int validLabelCount;
+        public final float accumulatedLoss;
+        public final int accumulationStep;
+        public final int gradientAccumulationSteps;
+        public final boolean optimizerStep;
 
-        private TrainStepResult(float loss, int trainableTensorCount) {
+        private TrainStepResult(
+                float loss,
+                int trainableTensorCount,
+                int validLabelCount,
+                float accumulatedLoss,
+                int accumulationStep,
+                int gradientAccumulationSteps,
+                boolean optimizerStep
+        ) {
             this.loss = loss;
             this.trainableTensorCount = trainableTensorCount;
+            this.validLabelCount = validLabelCount;
+            this.accumulatedLoss = accumulatedLoss;
+            this.accumulationStep = accumulationStep;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
+            this.optimizerStep = optimizerStep;
         }
     }
 

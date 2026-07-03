@@ -22,11 +22,22 @@ enum class EventType {
 }
 
 enum class DashboardTab(val title: String) {
+    RUNNER("Runner"),
     OVERVIEW("Overview"),
     TRAINING("Training"),
     COMPARISON("Comparison"),
     LOGS("Logs"),
     EXPERIMENTS("Experiments")
+}
+
+enum class RunnerStatus {
+    IDLE,
+    IMPORTING,
+    READY,
+    RUNNING,
+    COMPLETED,
+    FAILED,
+    STOPPING
 }
 
 data class StepMetric(
@@ -179,6 +190,44 @@ data class NativeInferenceState(
     val error: String? = null
 )
 
+data class LocalModelAsset(
+    val id: String,
+    val name: String,
+    val path: String,
+    val family: String,
+    val hasWeights: Boolean,
+    val sizeBytes: Long,
+    val updatedAtMs: Long
+)
+
+data class RunnerStepResult(
+    val step: Int,
+    val loss: Float,
+    val trainableTensorCount: Int,
+    val validLabelCount: Int,
+    val accumulationStep: Int,
+    val gradientAccumulationSteps: Int,
+    val optimizerStep: Boolean,
+    val elapsedMs: Long
+)
+
+data class RunnerUiState(
+    val status: RunnerStatus = RunnerStatus.IDLE,
+    val models: List<LocalModelAsset> = emptyList(),
+    val selectedModelId: String? = null,
+    val loadWeights: Boolean = true,
+    val sequenceLength: Int = 2,
+    val batchSize: Int = 1,
+    val gradientAccumulationSteps: Int = 1,
+    val steps: Int = 1,
+    val trainingText: String = "MobileFineTuner foreground training smoke.",
+    val importingModelName: String? = null,
+    val currentMessage: String = "Ready",
+    val logs: List<String> = emptyList(),
+    val results: List<RunnerStepResult> = emptyList(),
+    val error: String? = null
+)
+
 data class DashboardUiState(
     val selectedRootUri: Uri? = null,
     val activeTab: DashboardTab = DashboardTab.EXPERIMENTS,
@@ -191,6 +240,7 @@ data class DashboardUiState(
     val nativeDemoConfig: NativeDemoConfig = NativeDemoConfig(),
     val nativeDemoRunner: NativeDemoRunnerState = NativeDemoRunnerState(),
     val nativeInference: NativeInferenceState = NativeInferenceState(),
+    val runner: RunnerUiState = RunnerUiState(),
     val isLoading: Boolean = false,
     val error: String? = null
 )

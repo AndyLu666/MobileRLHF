@@ -105,7 +105,14 @@ MobileFineTuner.SelfTestResult smoke = MobileFineTuner.selfTest(context.getFiles
 
 try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
     mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
-    mf.createTrainer(MobileFineTuner.TrainerConfig.defaults());
+    mf.createTrainer(new MobileFineTuner.TrainerConfig(
+            2e-4f,
+            0.0f,
+            1.0f,
+            -100,
+            true,
+            4       // gradientAccumulationSteps
+    ));
 
     MobileFineTuner.TrainStepResult result = mf.trainStep(
             inputIds,
@@ -119,17 +126,75 @@ try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
 }
 ```
 
+For the standard causal-LM path, Android callers can let the native tokenizer
+and batch builder create `inputIds`, `attentionMask`, and shifted labels:
+
+```java
+try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
+    mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+    mf.createTrainer(MobileFineTuner.TrainerConfig.defaults());
+
+    MobileFineTuner.TrainStepResult result = mf.trainTextBatch(
+            new String[]{"A training sentence.", "Another sentence."},
+            64,
+            true  // appendEos: supervise independent sample boundaries
+    );
+}
+```
+
+For the preference-optimization path, callers provide prompt/chosen/rejected
+text pairs and cached reference log-probabilities. The SDK tokenizes the text,
+builds response masks, runs the DPO loss, backpropagates through the policy
+LoRA adapters, and applies the optimizer step:
+
+```java
+try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
+    mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+    mf.createDpoTrainer(MobileFineTuner.DpoTrainerConfig.defaults());
+
+    MobileFineTuner.PreferenceStepResult result = mf.trainPreferenceBatch(
+            prompts,
+            chosenResponses,
+            rejectedResponses,
+            refChosenLogps,
+            refRejectedLogps,
+            64,
+            true  // appendEosToResponse
+    );
+
+    float loss = result.loss;
+    float rewardMargin = result.rewardMargin;
+}
+```
+
+The Java DPO API intentionally uses cached reference log-probabilities. This is
+the mobile-friendly path because it trains only the policy adapters on device.
+The C++ API also supports an in-process reference model for parity experiments,
+but that doubles model residency and is usually too expensive for phone runs.
+
 Call order:
 
 1. `MobileFineTuner.open(modelDir, loadWeights)`
 2. `initLora(...)`
-3. `createTrainer(...)`
-4. `trainStep(...)`
+3. `createTrainer(...)` for SFT or `createDpoTrainer(...)` for DPO
+4. `trainStep(...)`, `trainTextBatch(...)`, or `trainPreferenceBatch(...)`
 5. `close()`
 
 `inputIds`, `attentionMask`, and `labels` are flattened row-major arrays with
 length `batchSize * sequenceLength`. Labels use the same shifted causal-LM
 contract as the C++ `AutoTrainer`: ignored positions should be `-100`.
+`trainTextBatch` applies that contract internally through the C++ tokenizer
+factory and `CausalLMBatch` builder. The two-argument `trainTextBatch(texts,
+sequenceLength)` keeps `appendEos=false` for backwards compatibility; the
+three-argument overload makes the sample-boundary policy explicit.
+
+`TrainerConfig.defaults()` uses streaming full-token CE and
+`gradientAccumulationSteps=1` by default, so Android training does not allocate
+a dense `[batch, sequence, vocab]` logits tensor. Use
+`new TrainerConfig(lr, wd, maxGradNorm, ignoreIndex, false, gradAccumSteps)`
+only for dense logits debugging. When `gradAccumSteps > 1`, `trainStep` and
+`trainTextBatch` still return the current micro-batch loss, while the returned
+`optimizerStep` flag indicates whether that call performed the Adam update.
 
 ## Device Smoke Test
 
@@ -144,7 +209,43 @@ cd android-visualizer
 
 The smoke test does not require external model weights. It creates a small
 temporary HuggingFace-style config in app-private storage, initializes LoRA, and
-executes one native `AutoTrainer` step.
+executes one native `AutoTrainer` step and one cached-reference `DPOTrainer`
+step.
+
+When real model assets are staged on the device, the same instrumentation suite
+can exercise the SDK open/init/train-text path for current families. Provide one
+or more model directories through instrumentation arguments:
+
+```bash
+cd android-visualizer
+./gradlew :mft-sdk:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.mft.gpt2.modelDir=/sdcard/MobileFineTuner/models/gpt2 \
+  -Pandroid.testInstrumentationRunnerArguments.mft.gemma.modelDir=/sdcard/MobileFineTuner/models/gemma-3-270m \
+  -Pandroid.testInstrumentationRunnerArguments.mft.qwen.modelDir=/sdcard/MobileFineTuner/models/Qwen2.5-0.5B
+```
+
+If no real model directory is supplied, the real-asset instrumentation case is
+skipped and the synthetic SDK smoke still runs. Add
+`.loadWeights=false` to any argument prefix when you only want to validate graph,
+tokenizer, LoRA, and JNI wiring without loading full SafeTensors weights.
+
+On Android versions with scoped storage, prefer app-private storage for
+instrumentation assets, for example:
+
+```text
+/data/user/0/com.mobilefinetuner.sdk.test/files/models/gpt2
+```
+
+The real-asset smoke supports staged modes through `<prefix>.mode`:
+
+- `open`: validate model config/tokenizer discovery and model construction.
+- `lora`: validate `open` plus LoRA adapter initialization.
+- `trainer`: validate `open`, LoRA initialization, and trainer creation.
+- `trainText`: run a native tokenizer-backed training step.
+
+Large models can exceed vendor background execution limits when run through
+instrumentation. Use `trainer` for heavyweight family readiness checks and keep
+`trainText` for a model/sequence pair that completes within the device limit.
 
 ## Sample App
 
@@ -186,7 +287,7 @@ Java MobileFineTuner
 libmobilefinetuner_jni.so
         |
         v
-ops::AutoModelForCausalLM + ops::AutoTrainer
+ops::AutoModelForCausalLM + ops::AutoTrainer / ops::DPOTrainer
 ```
 
 The Android layer does not duplicate model math. All forward, loss, backward,
@@ -196,8 +297,9 @@ core.
 ## Current Limitations
 
 - `arm64-v8a` only.
-- Java API currently exposes the install self-test and one-step LoRA training
-  core, not a full dataset loop or checkpoint manager.
+- Java API currently exposes the install self-test, one-step tensor LoRA
+  training, and one-step text-batch LoRA training, not a full dataset loop or
+  checkpoint manager.
 - Model files are loaded from normal filesystem paths; the SDK does not load
   directly from compressed APK assets.
 - Full-weight phone training still depends on device memory limits and the

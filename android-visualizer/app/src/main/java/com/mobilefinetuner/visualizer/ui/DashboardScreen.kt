@@ -212,7 +212,7 @@ fun DashboardScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (ui.activeTab != DashboardTab.EXPERIMENTS) {
+                if (ui.activeTab != DashboardTab.EXPERIMENTS && ui.activeTab != DashboardTab.RUNNER) {
                     ControlBar(
                         runs = ui.runHandles,
                         selectedRunId = ui.selectedRunId,
@@ -272,12 +272,17 @@ fun DashboardScreen(
                     }
                 ) { tab ->
                     val feedbackSession = ui.feedbackSession
-                    if (feedbackSession != null && !feedbackSession.isComplete && tab != DashboardTab.EXPERIMENTS) {
+                    if (feedbackSession != null &&
+                        !feedbackSession.isComplete &&
+                        tab != DashboardTab.EXPERIMENTS &&
+                        tab != DashboardTab.RUNNER
+                    ) {
                         FeedbackCollectionPanel(
                             session = feedbackSession,
                             onChoose = viewModel::chooseFeedback
                         )
                     } else when (tab) {
+                        DashboardTab.RUNNER -> RunnerScreen(runner = ui.runner, viewModel = viewModel)
                         DashboardTab.OVERVIEW -> OverviewTab(snapshot = ui.snapshot)
                         DashboardTab.TRAINING -> TrainingTab(snapshot = ui.snapshot)
                         DashboardTab.COMPARISON -> ComparisonTab(
@@ -2489,6 +2494,7 @@ private fun nativeRunnerColor(status: NativeDemoRunStatus): Color {
 
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
+        DashboardTab.RUNNER -> "Run"
         DashboardTab.OVERVIEW -> "Summary"
         DashboardTab.TRAINING -> "Train"
         DashboardTab.COMPARISON -> "Versus"
