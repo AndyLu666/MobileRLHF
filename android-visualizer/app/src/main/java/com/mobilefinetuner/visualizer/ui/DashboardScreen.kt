@@ -3287,9 +3287,9 @@ private fun nativeRunnerColor(status: NativeDemoRunStatus): Color {
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
         DashboardTab.RUNNER -> "Run"
-        DashboardTab.OVERVIEW -> "Summary"
-        DashboardTab.TRAINING -> "Train"
-        DashboardTab.COMPARISON -> "Versus"
+        DashboardTab.OVERVIEW -> "Progress"
+        DashboardTab.TRAINING -> "Charts"
+        DashboardTab.COMPARISON -> "Compare"
         DashboardTab.LOGS -> "Logs"
         DashboardTab.EXPERIMENTS -> "Demo"
     }
