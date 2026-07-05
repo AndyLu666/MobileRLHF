@@ -24,6 +24,12 @@ object FeedbackJsonl {
         val userId: String = "local_device_user"
     )
 
+    data class TrainingPair(
+        val prompt: String,
+        val chosen: String,
+        val rejected: String
+    )
+
     fun encodeChoice(record: ChoiceRecord): String {
         val normalizedLabel = record.chosenLabel.trim().uppercase()
         require(normalizedLabel == "A" || normalizedLabel == "B") {
@@ -90,12 +96,82 @@ object FeedbackJsonl {
             hasJsonField(line, "label")
     }
 
+    fun toTrainingPairs(
+        lines: List<String>,
+        desirableBaseline: String,
+        undesirableBaseline: String
+    ): List<TrainingPair> {
+        return lines.mapNotNull { line ->
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) return@mapNotNull null
+            val prompt = extractJsonString(trimmed, "prompt")?.trim().orEmpty()
+            if (prompt.isBlank()) return@mapNotNull null
+
+            if (hasTypedSingle(trimmed)) {
+                val response = extractJsonString(trimmed, "response")?.trim().orEmpty()
+                if (response.isBlank()) return@mapNotNull null
+                if (hasJsonBooleanValue(trimmed, "label", true)) {
+                    TrainingPair(prompt, response, undesirableBaseline)
+                } else if (hasJsonBooleanValue(trimmed, "label", false)) {
+                    TrainingPair(prompt, desirableBaseline, response)
+                } else {
+                    null
+                }
+            } else {
+                val chosen = extractJsonString(trimmed, "chosen")?.trim().orEmpty()
+                val rejected = extractJsonString(trimmed, "rejected")?.trim().orEmpty()
+                if (chosen.isBlank() || rejected.isBlank()) null else TrainingPair(prompt, chosen, rejected)
+            }
+        }
+    }
+
     private fun hasJsonField(line: String, key: String): Boolean {
         return line.contains("\"$key\":")
     }
 
     private fun hasJsonStringValue(line: String, key: String, value: String): Boolean {
         return line.contains("\"$key\":\"$value\"")
+    }
+
+    private fun hasJsonBooleanValue(line: String, key: String, value: Boolean): Boolean {
+        return line.contains("\"$key\":$value")
+    }
+
+    private fun extractJsonString(line: String, key: String): String? {
+        val prefix = "\"$key\":\""
+        val start = line.indexOf(prefix)
+        if (start < 0) return null
+        val valueStart = start + prefix.length
+        val out = StringBuilder()
+        var escaped = false
+        for (i in valueStart until line.length) {
+            val ch = line[i]
+            if (escaped) {
+                when (ch) {
+                    '\\' -> out.append('\\')
+                    '"' -> out.append('"')
+                    'b' -> out.append('\b')
+                    'f' -> out.append('\u000C')
+                    'n' -> out.append('\n')
+                    'r' -> out.append('\r')
+                    't' -> out.append('\t')
+                    'u' -> {
+                        val hex = line.substring(i + 1, (i + 5).coerceAtMost(line.length))
+                        val code = hex.toIntOrNull(16)
+                        if (code != null) out.append(code.toChar())
+                    }
+                    else -> out.append(ch)
+                }
+                escaped = false
+            } else if (ch == '\\') {
+                escaped = true
+            } else if (ch == '"') {
+                return out.toString()
+            } else {
+                out.append(ch)
+            }
+        }
+        return null
     }
 
     private fun encodeFields(fields: List<Pair<String, Any>>): String {

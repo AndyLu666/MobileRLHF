@@ -130,4 +130,40 @@ class FeedbackJsonlTest {
         assertThat(FeedbackJsonl.hasTypedSingle(single)).isTrue()
         assertThat(FeedbackJsonl.hasTypedSingle(pair)).isFalse()
     }
+
+    @Test
+    fun toTrainingPairsConvertsSingleUpAndDownRowsForNativeSdk() {
+        val up = FeedbackJsonl.encodeRating(
+            FeedbackJsonl.RatingRecord(
+                prompt = "Recovery?",
+                response = "Take an easy walk.",
+                desirable = true,
+                sessionId = "s1",
+                ratingIndex = 0,
+                timestampMs = 1L
+            )
+        )
+        val down = FeedbackJsonl.encodeRating(
+            FeedbackJsonl.RatingRecord(
+                prompt = "Recovery?",
+                response = "Do hard intervals after poor sleep.",
+                desirable = false,
+                sessionId = "s2",
+                ratingIndex = 1,
+                timestampMs = 2L
+            )
+        )
+
+        val pairs = FeedbackJsonl.toTrainingPairs(
+            lines = listOf(up, down),
+            desirableBaseline = "Use a safe, evidence-based health suggestion.",
+            undesirableBaseline = "Give unsafe or irrelevant health advice."
+        )
+
+        assertThat(pairs).hasSize(2)
+        assertThat(pairs[0].chosen).isEqualTo("Take an easy walk.")
+        assertThat(pairs[0].rejected).isEqualTo("Give unsafe or irrelevant health advice.")
+        assertThat(pairs[1].chosen).isEqualTo("Use a safe, evidence-based health suggestion.")
+        assertThat(pairs[1].rejected).isEqualTo("Do hard intervals after poor sleep.")
+    }
 }

@@ -1206,21 +1206,14 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun readPreferenceRows(path: File): List<PreferenceRow> {
-        return path.readLines()
-            .mapNotNull { line ->
-                if (line.isBlank()) return@mapNotNull null
-                runCatching {
-                    val json = JSONObject(line)
-                    val prompt = json.optString("prompt").trim()
-                    val chosen = json.optString("chosen").trim()
-                    val rejected = json.optString("rejected").trim()
-                    if (prompt.isBlank() || chosen.isBlank() || rejected.isBlank()) {
-                        null
-                    } else {
-                        PreferenceRow(prompt, chosen, rejected)
-                    }
-                }.getOrNull()
-            }
+        val lines = path.readLines()
+        return FeedbackJsonl.toTrainingPairs(
+            lines = lines,
+            desirableBaseline = "Give a cautious, personalized health suggestion that respects fatigue, sleep, and recovery.",
+            undesirableBaseline = "Give unsafe, generic, or irrelevant health advice that ignores the user's context."
+        ).map { pair ->
+            PreferenceRow(pair.prompt, pair.chosen, pair.rejected)
+        }
     }
 
     private fun runNativeKtoTraining(
