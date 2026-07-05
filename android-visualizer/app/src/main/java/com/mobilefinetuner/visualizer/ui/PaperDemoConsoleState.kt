@@ -3,6 +3,7 @@ package com.mobilefinetuner.visualizer.ui
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
+import com.mobilefinetuner.visualizer.model.NativeFeedbackMode
 import com.mobilefinetuner.visualizer.model.NativeInferenceState
 import com.mobilefinetuner.visualizer.model.RunSnapshot
 import java.util.Locale
@@ -32,6 +33,21 @@ data class DemoEvidenceState(
     val trendAccuracy: String,
     val trendMargin: String,
     val artifacts: String
+)
+
+data class FeedbackModeUiState(
+    val selectedLabel: String,
+    val actionLabel: String,
+    val helpText: String
+)
+
+data class DemoLiveProgressState(
+    val stepLabel: String,
+    val rewardAccuracy: String,
+    val rewardMargin: String,
+    val loss: String,
+    val peakMemory: String,
+    val message: String
 )
 
 fun buildDemoWorkflowSteps(
@@ -85,6 +101,47 @@ fun buildDemoWorkflowSteps(
             label = "Evidence",
             status = if (evidenceDone) DemoWorkflowStatus.DONE else DemoWorkflowStatus.NEEDS_INPUT
         )
+    )
+}
+
+fun buildFeedbackModeState(inference: NativeInferenceState): FeedbackModeUiState {
+    return when (inference.feedbackMode) {
+        NativeFeedbackMode.PAIR -> FeedbackModeUiState(
+            selectedLabel = "A/B Compare",
+            actionLabel = "Generate A/B",
+            helpText = "Generate two answers and choose the better answer."
+        )
+        NativeFeedbackMode.SINGLE -> FeedbackModeUiState(
+            selectedLabel = "Single Rating",
+            actionLabel = "Generate One",
+            helpText = "Generate one answer and rate it with thumbs up or down."
+        )
+    }
+}
+
+fun buildDemoLiveProgressState(snapshot: RunSnapshot?): DemoLiveProgressState {
+    val metrics = snapshot?.metrics.orEmpty()
+    val last = metrics.lastOrNull()
+    val total = last?.totalSteps ?: snapshot?.summary?.totalSteps
+    val stepLabel = when {
+        last?.step != null && total != null -> "${last.step} / $total"
+        last?.step != null -> "${last.step} / ?"
+        else -> "Waiting"
+    }
+    val peakMemory = metrics.mapNotNull { it.rssMb }.maxOrNull()
+        ?: snapshot?.summary?.maxTrainRssMb
+    val hasReward = last?.rewardAccuracy != null || last?.rewardMargin != null
+    return DemoLiveProgressState(
+        stepLabel = stepLabel,
+        rewardAccuracy = formatDemoMetric(last?.rewardAccuracy),
+        rewardMargin = formatDemoMetric(last?.rewardMargin),
+        loss = formatDemoMetric(last?.loss),
+        peakMemory = peakMemory?.let { "${formatDemoMetric(it, digits = 1)} MB" } ?: "N/A",
+        message = when {
+            metrics.isEmpty() -> "Waiting for metrics."
+            hasReward -> "Reward trend is visible."
+            else -> "Metrics parsed; waiting for reward fields."
+        }
     )
 }
 

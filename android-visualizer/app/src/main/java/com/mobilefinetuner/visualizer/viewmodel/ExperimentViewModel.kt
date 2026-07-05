@@ -801,10 +801,11 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         _uiState.value = _uiState.value.copy(
             nativeInference = state.copy(
                 savedPairs = if (appendError == null) state.savedPairs + 1 else state.savedPairs,
+                savedFeedbackRows = if (appendError == null) countJsonlLines(file) else state.savedFeedbackRows,
                 feedbackJsonlPath = file.absolutePath,
                 lastChosenLabel = normalized.takeIf { appendError == null },
                 feedbackStatus = if (appendError == null) {
-                    "Saved preference $normalized. Qwen KTO will use ${state.savedPairs + 1} feedback pair(s)."
+                    "Saved preference $normalized. Qwen KTO will use ${countJsonlLines(file)} feedback row(s)."
                 } else {
                     "Failed to save preference: ${appendError.message ?: appendError.javaClass.simpleName}"
                 },

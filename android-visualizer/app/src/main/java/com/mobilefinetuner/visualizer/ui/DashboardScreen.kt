@@ -40,6 +40,8 @@ import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.ThumbDown
+import androidx.compose.material.icons.rounded.ThumbUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
@@ -87,6 +89,7 @@ import com.mobilefinetuner.visualizer.model.InferenceRecord
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
+import com.mobilefinetuner.visualizer.model.NativeFeedbackMode
 import com.mobilefinetuner.visualizer.model.NativeInferenceState
 import com.mobilefinetuner.visualizer.model.RunHandle
 import com.mobilefinetuner.visualizer.model.RunSnapshot
@@ -137,33 +140,8 @@ fun DashboardScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    listOf(
-                        Color(0xFFF2F2F7),
-                        Color(0xFFFFFFFF),
-                        Color(0xFFF2F8FF)
-                    )
-                )
-            )
+            .background(Color(0xFFF6F7F9))
     ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = 72.dp, y = (-40).dp)
-                .size(240.dp)
-                .clip(CircleShape)
-                .background(Color(0x18007AFF))
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = (-96).dp, y = 20.dp)
-                .size(300.dp)
-                .clip(CircleShape)
-                .background(Color(0x1234C759))
-        )
-
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             containerColor = Color.Transparent,
@@ -190,7 +168,7 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.headlineSmall
                                 )
                                 Text(
-                                    text     = ui.snapshot?.runName ?: "Ready to load runs",
+                                    text     = ui.snapshot?.runName ?: "On-device preference tuning with Qwen3-0.6B",
                                     style    = MaterialTheme.typography.bodyMedium,
                                     color    = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.88f),
                                     maxLines = 1,
@@ -305,9 +283,10 @@ fun DashboardScreen(
                             onEnableDpoTest = viewModel::enableDpoTestMode,
                             onChooseFeedback = viewModel::chooseFeedback,
                             onInferenceChange = viewModel::updateNativeInference,
-                            onGenerate = viewModel::runNativeInference,
+                            onGenerateSingle = viewModel::runNativeInference,
                             onGeneratePair = viewModel::runNativeInferencePair,
                             onChooseCandidate = viewModel::chooseNativeInferenceCandidate,
+                            onChooseRating = viewModel::chooseNativeInferenceRating,
                             onConfigChange = viewModel::updateNativeDemoConfig,
                             onPreset = viewModel::applyNativeDemoPreset,
                             onStart = viewModel::startNativeDemoRun,
@@ -1653,33 +1632,88 @@ private fun ExperimentsTab(
     onEnableDpoTest: () -> Unit,
     onChooseFeedback: (String) -> Unit,
     onInferenceChange: (NativeInferenceState) -> Unit,
-    onGenerate: () -> Unit,
+    onGenerateSingle: () -> Unit,
     onGeneratePair: () -> Unit,
     onChooseCandidate: (String) -> Unit,
+    onChooseRating: (Boolean) -> Unit,
     onConfigChange: (NativeDemoConfig) -> Unit,
     onPreset: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
+    PaperDemoConsole(
+        runs = runs,
+        selectedRunId = selectedRunId,
+        compareRunId = compareRunId,
+        config = config,
+        runner = runner,
+        inference = inference,
+        snapshot = snapshot,
+        feedbackSession = feedbackSession,
+        onPickDirectory = onPickDirectory,
+        onEnableDemo = onEnableDemo,
+        onEnableDpoTest = onEnableDpoTest,
+        onChooseFeedback = onChooseFeedback,
+        onInferenceChange = onInferenceChange,
+        onGenerateSingle = onGenerateSingle,
+        onGeneratePair = onGeneratePair,
+        onChooseCandidate = onChooseCandidate,
+        onChooseRating = onChooseRating,
+        onConfigChange = onConfigChange,
+        onPreset = onPreset,
+        onStart = onStart,
+        onStop = onStop
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperDemoConsole(
+    runs: List<RunHandle>,
+    selectedRunId: String?,
+    compareRunId: String?,
+    config: NativeDemoConfig,
+    runner: NativeDemoRunnerState,
+    inference: NativeInferenceState,
+    snapshot: RunSnapshot?,
+    feedbackSession: FeedbackSessionState?,
+    onPickDirectory: () -> Unit,
+    onEnableDemo: () -> Unit,
+    onEnableDpoTest: () -> Unit,
+    onChooseFeedback: (String) -> Unit,
+    onInferenceChange: (NativeInferenceState) -> Unit,
+    onGenerateSingle: () -> Unit,
+    onGeneratePair: () -> Unit,
+    onChooseCandidate: (String) -> Unit,
+    onChooseRating: (Boolean) -> Unit,
+    onConfigChange: (NativeDemoConfig) -> Unit,
+    onPreset: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    val workflowSteps = buildDemoWorkflowSteps(inference, runner, snapshot)
+    val evidence = buildDemoEvidenceState(config, runner, snapshot)
+    val selectedRun = runs.firstOrNull { it.id == selectedRunId }?.name ?: "No run selected"
+    val compareRun = runs.firstOrNull { it.id == compareRunId }?.name ?: "None"
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
-            DemoCommandCenter(
-                runs = runs,
-                selectedRunId = selectedRunId,
-                compareRunId = compareRunId,
+            PaperConsoleHeader(
+                selectedRun = selectedRun,
+                compareRun = compareRun,
                 runner = runner,
-                inference = inference,
-                snapshot = snapshot,
                 onPickDirectory = onPickDirectory,
                 onEnableDemo = onEnableDemo,
                 onEnableDpoTest = onEnableDpoTest
             )
         }
-
+        item {
+            WorkflowStrip(steps = workflowSteps)
+        }
         if (feedbackSession != null && !feedbackSession.isComplete) {
             item {
                 FeedbackCollectionPanel(
@@ -1688,19 +1722,18 @@ private fun ExperimentsTab(
                 )
             }
         }
-
         item {
-            NativeInferenceCard(
+            PaperGeneratePreferPanel(
                 state = inference,
                 onStateChange = onInferenceChange,
-                onGenerate = onGenerate,
+                onGenerateSingle = onGenerateSingle,
                 onGeneratePair = onGeneratePair,
-                onChooseCandidate = onChooseCandidate
+                onChooseCandidate = onChooseCandidate,
+                onChooseRating = onChooseRating
             )
         }
-
         item {
-            NativeDemoRunnerCard(
+            PaperKtoTrainingPanel(
                 config = config,
                 runner = runner,
                 snapshot = snapshot,
@@ -1710,7 +1743,678 @@ private fun ExperimentsTab(
                 onStop = onStop
             )
         }
+        item {
+            PaperEvidencePanel(evidence = evidence)
+        }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperConsoleHeader(
+    selectedRun: String,
+    compareRun: String,
+    runner: NativeDemoRunnerState,
+    onPickDirectory: () -> Unit,
+    onEnableDemo: () -> Unit,
+    onEnableDpoTest: () -> Unit
+) {
+    val running = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White,
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Paper Demo Console", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "Generate -> Prefer -> Train KTO -> Evidence",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    text = runner.status.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = nativeRunnerColor(runner.status),
+                    modifier = Modifier
+                        .background(nativeRunnerColor(runner.status).copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                Button(
+                    onClick = onPickDirectory,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                ) {
+                    Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Runs", maxLines = 1)
+                }
+                OutlinedButton(
+                    onClick = onEnableDemo,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                ) {
+                    Text("Load Demo", maxLines = 1)
+                }
+                OutlinedButton(
+                    onClick = onEnableDpoTest,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                ) {
+                    Text("DPO Test", maxLines = 1)
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 2
+            ) {
+                MiniMetricChip(
+                    label = "Selected Run",
+                    value = selectedRun,
+                    accent = NeonBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Compare",
+                    value = compareRun,
+                    accent = RssColor,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowStrip(steps: List<DemoWorkflowStepState>) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Row(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            steps.forEachIndexed { index, step ->
+                WorkflowStepPill(
+                    index = index + 1,
+                    step = step,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowStepPill(
+    index: Int,
+    step: DemoWorkflowStepState,
+    modifier: Modifier = Modifier
+) {
+    val accent = workflowStatusColor(step.status)
+    Column(
+        modifier = modifier
+            .background(accent.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = 0.24f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = "$index. ${step.label}",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = workflowStatusLabel(step.status),
+            style = MaterialTheme.typography.labelSmall,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperGeneratePreferPanel(
+    state: NativeInferenceState,
+    onStateChange: (NativeInferenceState) -> Unit,
+    onGenerateSingle: () -> Unit,
+    onGeneratePair: () -> Unit,
+    onChooseCandidate: (String) -> Unit,
+    onChooseRating: (Boolean) -> Unit
+) {
+    val mode = buildFeedbackModeState(state)
+    val isPairMode = state.feedbackMode == NativeFeedbackMode.PAIR
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SectionHeader(
+                title = "1. Feedback Lab",
+                subtitle = mode.helpText
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 2
+            ) {
+                MiniMetricChip(
+                    label = "Model",
+                    value = if (state.useFedCampusBridge) "FedCampus bridge" else "Qwen3-0.6B",
+                    accent = NeonBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "KTO Rows",
+                    value = state.savedFeedbackRows.toString(),
+                    accent = if (state.savedFeedbackRows > 0) NeonGreen else NeonAmber,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 2
+            ) {
+                FeedbackModeButton(
+                    label = "A/B Compare",
+                    selected = state.feedbackMode == NativeFeedbackMode.PAIR,
+                    enabled = !state.isRunning,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onStateChange(
+                        state.copy(
+                            feedbackMode = NativeFeedbackMode.PAIR,
+                            output = null,
+                            lastRatingLabel = null,
+                            feedbackStatus = null
+                        )
+                    )
+                }
+                FeedbackModeButton(
+                    label = "Single Rating",
+                    selected = state.feedbackMode == NativeFeedbackMode.SINGLE,
+                    enabled = !state.isRunning,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    onStateChange(
+                        state.copy(
+                            feedbackMode = NativeFeedbackMode.SINGLE,
+                            candidateA = null,
+                            candidateB = null,
+                            lastChosenLabel = null,
+                            feedbackStatus = null
+                        )
+                    )
+                }
+            }
+            ToggleRow(
+                label = "Use FedCampus bridge",
+                checked = state.useFedCampusBridge,
+                enabled = !state.isRunning,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                onStateChange(state.copy(useFedCampusBridge = it))
+            }
+            if (state.useFedCampusBridge) {
+                OutlinedTextField(
+                    value = state.bridgeUrl,
+                    onValueChange = { onStateChange(state.copy(bridgeUrl = it)) },
+                    enabled = !state.isRunning,
+                    label = { Text("Bridge URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                OutlinedTextField(
+                    value = state.modelDir,
+                    onValueChange = { onStateChange(state.copy(modelDir = it)) },
+                    enabled = !state.isRunning,
+                    label = { Text("Model Dir") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            OutlinedTextField(
+                value = state.prompt,
+                onValueChange = { onStateChange(state.copy(prompt = it)) },
+                enabled = !state.isRunning,
+                label = { Text("Health prompt") },
+                minLines = 3,
+                maxLines = 5,
+                modifier = Modifier.fillMaxWidth()
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                IntField("Max Tokens", state.maxNewTokens, !state.isRunning, Modifier.weight(1f)) {
+                    onStateChange(state.copy(maxNewTokens = it))
+                }
+                DecimalField("Temp", state.temperature, !state.isRunning, Modifier.weight(1f)) {
+                    onStateChange(state.copy(temperature = it))
+                }
+                Button(
+                    onClick = if (isPairMode) onGeneratePair else onGenerateSingle,
+                    enabled = !state.isRunning &&
+                        state.prompt.isNotBlank() &&
+                        (state.useFedCampusBridge || state.modelDir.isNotBlank()),
+                    modifier = Modifier.weight(1f).heightIn(min = 56.dp)
+                ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(mode.actionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (state.isRunning) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                    Text("Generating candidates...", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            state.feedbackStatus?.takeIf { it.isNotBlank() }?.let {
+                InlineStatus(message = it, accent = NeonGreen)
+            }
+            state.error?.takeIf { it.isNotBlank() }?.let {
+                InlineStatus(message = it, accent = MaterialTheme.colorScheme.error)
+            }
+            if (!isPairMode) {
+                state.output?.takeIf { it.isNotBlank() }?.let { output ->
+                    SingleRatingBlock(
+                        text = output,
+                        upSelected = state.lastRatingLabel == "UP",
+                        downSelected = state.lastRatingLabel == "DOWN",
+                        enabled = state.lastRatingLabel == null && !state.isRunning,
+                        onThumbUp = { onChooseRating(true) },
+                        onThumbDown = { onChooseRating(false) }
+                    )
+                }
+            }
+            val a = state.candidateA
+            val b = state.candidateB
+            if (isPairMode && (!a.isNullOrBlank() || !b.isNullOrBlank())) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 2
+                ) {
+                    CandidatePreferenceBlock(
+                        label = "A",
+                        text = a ?: "",
+                        enabled = state.lastChosenLabel == null && !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        selected = state.lastChosenLabel == "A",
+                        modifier = Modifier.weight(1f),
+                        onChoose = { onChooseCandidate("A") }
+                    )
+                    CandidatePreferenceBlock(
+                        label = "B",
+                        text = b ?: "",
+                        enabled = state.lastChosenLabel == null && !state.isRunning && !a.isNullOrBlank() && !b.isNullOrBlank(),
+                        selected = state.lastChosenLabel == "B",
+                        modifier = Modifier.weight(1f),
+                        onChoose = { onChooseCandidate("B") }
+                    )
+                }
+            }
+            state.feedbackJsonlPath?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = "Feedback JSONL: $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeedbackModeButton(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    if (selected) {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier.heightIn(min = 44.dp)
+        ) {
+            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier.heightIn(min = 44.dp)
+        ) {
+            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun SingleRatingBlock(
+    text: String,
+    upSelected: Boolean,
+    downSelected: Boolean,
+    enabled: Boolean,
+    onThumbUp: () -> Unit,
+    onThumbDown: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White, RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(8.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "Model response",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onThumbUp,
+                enabled = enabled,
+                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+            ) {
+                Icon(Icons.Rounded.ThumbUp, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(if (upSelected) "Saved Up" else "Good")
+            }
+            OutlinedButton(
+                onClick = onThumbDown,
+                enabled = enabled,
+                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+            ) {
+                Icon(Icons.Rounded.ThumbDown, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(if (downSelected) "Saved Down" else "Bad")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperKtoTrainingPanel(
+    config: NativeDemoConfig,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?,
+    onConfigChange: (NativeDemoConfig) -> Unit,
+    onPreset: (String) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    val running = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
+    val last = snapshot?.metrics?.lastOrNull()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SectionHeader(
+                title = "2. Train KTO on Android",
+                subtitle = runner.message ?: "Use saved A/B feedback to update the local LoRA adapter."
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                MiniMetricChip(label = "Dataset", value = runner.trainingSourceLabel, accent = NeonGreen, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Pairs", value = if (runner.trainingPairCount > 0) runner.trainingPairCount.toString() else "Bundled", accent = NeonBlue, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Run", value = runner.currentRunName ?: "Ready", accent = RssColor, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Steps", value = "${config.steps}", accent = LrColor, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Batch", value = "2", accent = NeonAmber, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Seq Len", value = "${config.seqLen}", accent = RssColor, modifier = Modifier.weight(1f))
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                listOf("Smoke", "Phone 80", "Long 220").forEach { preset ->
+                    OutlinedButton(
+                        onClick = { onPreset(preset) },
+                        enabled = !running,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(preset, maxLines = 1)
+                    }
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                IntField("Steps", config.steps, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(steps = it, presetName = "Custom"))
+                }
+                IntField("Rank", config.rank, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(rank = it, presetName = "Custom"))
+                }
+                DecimalField("LR", config.learningRate, !running, Modifier.weight(1f)) {
+                    onConfigChange(config.copy(learningRate = it, presetName = "Custom"))
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                MiniMetricChip(label = "Loss", value = last?.loss?.let { formatDemoMetric(it) } ?: "N/A", accent = LossColor, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Reward Accuracy", value = last?.rewardAccuracy?.let { formatDemoMetric(it) } ?: "N/A", accent = NeonGreen, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Reward Margin", value = last?.rewardMargin?.let { formatDemoMetric(it) } ?: "N/A", accent = NeonBlue, modifier = Modifier.weight(1f))
+            }
+            runner.trainingJsonlPath?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = "Training JSONL: $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = onStart,
+                    enabled = !running,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                ) {
+                    Text("Train KTO")
+                }
+                OutlinedButton(
+                    onClick = onStop,
+                    enabled = running,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                ) {
+                    Text("Stop")
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperEvidencePanel(evidence: DemoEvidenceState) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SectionHeader(
+                title = "3. Evidence for Paper",
+                subtitle = "Smoke runs show Android training mechanics and reward trend, not full quality proof."
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                PaperEvidenceMetric("Objective", evidence.objective, NeonBlue, Modifier.weight(1f))
+                PaperEvidenceMetric("Model", evidence.model, RssColor, Modifier.weight(1f))
+                PaperEvidenceMetric("Pairs", evidence.pairs, NeonGreen, Modifier.weight(1f))
+                PaperEvidenceMetric("Steps", evidence.steps, LrColor, Modifier.weight(1f))
+                PaperEvidenceMetric("Batch", evidence.batch, NeonAmber, Modifier.weight(1f))
+                PaperEvidenceMetric("Loss", evidence.loss, LossColor, Modifier.weight(1f))
+                PaperEvidenceMetric("Reward Accuracy", evidence.rewardAccuracy, NeonGreen, Modifier.weight(1f))
+                PaperEvidenceMetric("Reward Margin", evidence.rewardMargin, NeonBlue, Modifier.weight(1f))
+                PaperEvidenceMetric("Training Trend", evidence.trendMargin, RssColor, Modifier.weight(1f))
+            }
+            Text(
+                text = "Artifacts: ${evidence.artifacts}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, subtitle: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(title, style = MaterialTheme.typography.titleLarge)
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun InlineStatus(message: String, accent: Color) {
+    Surface(
+        color = accent.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = message,
+            modifier = Modifier.padding(10.dp),
+            color = accent,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
+private fun PaperEvidenceMetric(
+    label: String,
+    value: String,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .background(Color(0xFFF8FAFD), RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = 0.20f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+private fun workflowStatusLabel(status: DemoWorkflowStatus): String = when (status) {
+    DemoWorkflowStatus.READY -> "Ready"
+    DemoWorkflowStatus.NEEDS_INPUT -> "Needs input"
+    DemoWorkflowStatus.SAVED -> "Saved"
+    DemoWorkflowStatus.RUNNING -> "Running"
+    DemoWorkflowStatus.DONE -> "Done"
+}
+
+private fun workflowStatusColor(status: DemoWorkflowStatus): Color = when (status) {
+    DemoWorkflowStatus.READY -> NeonBlue
+    DemoWorkflowStatus.NEEDS_INPUT -> Color(0xFF8E8E93)
+    DemoWorkflowStatus.SAVED -> NeonGreen
+    DemoWorkflowStatus.RUNNING -> NeonAmber
+    DemoWorkflowStatus.DONE -> NeonGreen
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1886,7 +2590,7 @@ private fun NativeInferenceCard(
                         text = if (state.isRunning) {
                             "Running native Qwen generate..."
                         } else {
-                            "Generate answers, choose A/B, then train DPO from the saved feedback."
+                            "Generate answers, choose A/B, then train Qwen KTO from the saved feedback."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2166,8 +2870,8 @@ private fun CandidatePreferenceBlock(
     val borderColor = if (selected) NeonGreen else Color(0xFFDDE2EC)
     Column(
         modifier = modifier
-            .background(Color.White, RoundedCornerShape(14.dp))
-            .border(if (selected) 2.dp else 1.dp, borderColor, RoundedCornerShape(14.dp))
+            .background(Color.White, RoundedCornerShape(8.dp))
+            .border(if (selected) 2.dp else 1.dp, borderColor, RoundedCornerShape(8.dp))
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -2227,7 +2931,7 @@ private fun NativeDemoRunnerCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Native Demo Runner", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        text = runner.message ?: "Configure and launch on-device DPO training.",
+                        text = runner.message ?: "Configure and launch Qwen KTO training.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
@@ -2362,7 +3066,7 @@ private fun NativeDemoRunnerCard(
                     enabled = !running,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(if (usingFeedback) "Train on A/B" else "Run Demo")
+                    Text(if (usingFeedback) "Train KTO" else "Run Demo")
                 }
                 OutlinedButton(
                     onClick = onStop,

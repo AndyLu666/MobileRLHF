@@ -4,6 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import com.mobilefinetuner.visualizer.model.NativeDemoConfig
 import com.mobilefinetuner.visualizer.model.NativeDemoRunStatus
 import com.mobilefinetuner.visualizer.model.NativeDemoRunnerState
+import com.mobilefinetuner.visualizer.model.NativeFeedbackMode
 import com.mobilefinetuner.visualizer.model.NativeInferenceState
 import com.mobilefinetuner.visualizer.model.RunSnapshot
 import com.mobilefinetuner.visualizer.model.RunStatus
@@ -38,6 +39,35 @@ class PaperDemoConsoleStateTest {
         assertThat(steps[0].status).isEqualTo(DemoWorkflowStatus.DONE)
         assertThat(steps[1].status).isEqualTo(DemoWorkflowStatus.SAVED)
         assertThat(steps[2].status).isEqualTo(DemoWorkflowStatus.READY)
+    }
+
+    @Test
+    fun feedbackModeStateNamesPairAndSingleModes() {
+        val pair = buildFeedbackModeState(NativeInferenceState(feedbackMode = NativeFeedbackMode.PAIR))
+        val single = buildFeedbackModeState(NativeInferenceState(feedbackMode = NativeFeedbackMode.SINGLE))
+
+        assertThat(pair.selectedLabel).isEqualTo("A/B Compare")
+        assertThat(pair.actionLabel).isEqualTo("Generate A/B")
+        assertThat(pair.helpText).contains("choose the better answer")
+        assertThat(single.selectedLabel).isEqualTo("Single Rating")
+        assertThat(single.actionLabel).isEqualTo("Generate One")
+        assertThat(single.helpText).contains("thumbs up or down")
+    }
+
+    @Test
+    fun liveProgressFormatsCurrentStepFromSnapshot() {
+        val progress = buildDemoLiveProgressState(
+            snapshot = demoSnapshot(
+                loss = 0.49,
+                rewardAccuracy = 0.6,
+                rewardMargin = 0.08
+            )
+        )
+
+        assertThat(progress.stepLabel).isEqualTo("10 / 10")
+        assertThat(progress.rewardAccuracy).isEqualTo("0.600")
+        assertThat(progress.rewardMargin).isEqualTo("0.080")
+        assertThat(progress.message).isEqualTo("Reward trend is visible.")
     }
 
     @Test
