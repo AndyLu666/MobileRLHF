@@ -1744,6 +1744,9 @@ private fun PaperDemoConsole(
             )
         }
         item {
+            PaperLiveProgressPanel(snapshot = snapshot)
+        }
+        item {
             PaperEvidencePanel(evidence = evidence)
         }
     }
@@ -2300,6 +2303,91 @@ private fun PaperKtoTrainingPanel(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
+    val progress = buildDemoLiveProgressState(snapshot)
+    val metrics = snapshot?.metrics.orEmpty()
+    val rewardAccuracySeries = metrics.mapNotNull { it.rewardAccuracy }
+    val rewardMarginSeries = metrics.mapNotNull { it.rewardMargin }
+    val lossSeries = metrics.mapNotNull { it.loss }
+    val rssSeries = metrics.mapNotNull { it.rssMb }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SectionHeader(
+                title = "3. Live Evidence",
+                subtitle = progress.message
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 3
+            ) {
+                MiniMetricChip(label = "Step", value = progress.stepLabel, accent = LrColor, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Reward Accuracy", value = progress.rewardAccuracy, accent = NeonGreen, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Reward Margin", value = progress.rewardMargin, accent = NeonBlue, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Loss", value = progress.loss, accent = LossColor, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "Peak Memory", value = progress.peakMemory, accent = RssColor, modifier = Modifier.weight(1f))
+            }
+            if (metrics.size >= 2) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    maxItemsInEachRow = 2
+                ) {
+                    if (rewardAccuracySeries.isNotEmpty()) {
+                        InteractiveMetricLineChart(
+                            title = "Reward Accuracy",
+                            subtitle = "Higher is better",
+                            values = rewardAccuracySeries,
+                            color = NeonGreen,
+                            modifier = Modifier.weight(1f).heightIn(min = 190.dp)
+                        )
+                    }
+                    if (rewardMarginSeries.isNotEmpty()) {
+                        InteractiveMetricLineChart(
+                            title = "Reward Margin",
+                            subtitle = "Chosen minus rejected reward",
+                            values = rewardMarginSeries,
+                            color = NeonBlue,
+                            modifier = Modifier.weight(1f).heightIn(min = 190.dp)
+                        )
+                    }
+                    if (lossSeries.isNotEmpty()) {
+                        InteractiveMetricLineChart(
+                            title = "Loss",
+                            subtitle = "Secondary training signal",
+                            values = lossSeries,
+                            color = LossColor,
+                            modifier = Modifier.weight(1f).heightIn(min = 190.dp)
+                        )
+                    }
+                    if (rssSeries.isNotEmpty()) {
+                        InteractiveMetricLineChart(
+                            title = "Memory",
+                            subtitle = "RSS MB",
+                            values = rssSeries,
+                            color = RssColor,
+                            modifier = Modifier.weight(1f).heightIn(min = 190.dp),
+                            valueFormatter = { "${format1(it)} MB" }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun PaperEvidencePanel(evidence: DemoEvidenceState) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -2313,7 +2401,7 @@ private fun PaperEvidencePanel(evidence: DemoEvidenceState) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             SectionHeader(
-                title = "3. Evidence for Paper",
+                title = "4. Evidence for Paper",
                 subtitle = "Smoke runs show Android training mechanics and reward trend, not full quality proof."
             )
             FlowRow(

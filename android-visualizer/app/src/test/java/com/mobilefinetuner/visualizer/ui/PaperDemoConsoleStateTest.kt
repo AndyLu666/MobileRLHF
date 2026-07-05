@@ -71,6 +71,18 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun liveProgressFormatsMissingMetricsAsWaiting() {
+        val progress = buildDemoLiveProgressState(snapshot = null)
+
+        assertThat(progress.stepLabel).isEqualTo("Waiting")
+        assertThat(progress.rewardAccuracy).isEqualTo("N/A")
+        assertThat(progress.rewardMargin).isEqualTo("N/A")
+        assertThat(progress.loss).isEqualTo("N/A")
+        assertThat(progress.peakMemory).isEqualTo("N/A")
+        assertThat(progress.message).isEqualTo("Waiting for metrics.")
+    }
+
+    @Test
     fun workflowMarksTrainingAndEvidenceDoneFromRunnerAndSnapshot() {
         val steps = buildDemoWorkflowSteps(
             inference = NativeInferenceState(savedPairs = 30),
