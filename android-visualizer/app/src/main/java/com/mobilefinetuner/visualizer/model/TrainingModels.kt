@@ -145,10 +145,10 @@ enum class NativeDemoRunStatus {
 
 data class NativeDemoConfig(
     val presetName: String = "Smoke",
-    val steps: Int = 8,
-    val seqLen: Int = 128,
-    val rank: Int = 1,
-    val alpha: Int = 2,
+    val steps: Int = 10,
+    val seqLen: Int = 64,
+    val rank: Int = 2,
+    val alpha: Int = 4,
     val learningRate: Double = 0.001,
     val evalInterval: Int = 4,
     val evalBatches: Int = 1,
@@ -168,12 +168,20 @@ data class NativeDemoRunnerState(
     val message: String? = null
 )
 
+enum class NativeFeedbackMode {
+    PAIR,
+    SINGLE
+}
+
 data class NativeInferenceState(
     val modelDir: String = "/data/local/tmp/mft_qwen3",
-    val prompt: String = "What is 1+1? Answer with only the result.",
-    val maxNewTokens: Int = 8,
-    val temperature: Double = 0.0,
-    val topP: Double = 1.0,
+    val useFedCampusBridge: Boolean = false,
+    val bridgeUrl: String = "http://10.0.2.2:8765",
+    val prompt: String = "How is my activity level today?",
+    val referenceDate: String = "2026-06-25",
+    val maxNewTokens: Int = 72,
+    val temperature: Double = 0.2,
+    val topP: Double = 0.9,
     val modelLoaded: Boolean = false,
     val isRunning: Boolean = false,
     val output: String? = null,
@@ -182,11 +190,14 @@ data class NativeInferenceState(
     val elapsedMs: Double? = null,
     val loadElapsedMs: Double? = null,
     val generateElapsedMs: Double? = null,
+    val feedbackMode: NativeFeedbackMode = NativeFeedbackMode.PAIR,
     val savedPairs: Int = 0,
+    val savedFeedbackRows: Int = 0,
     val feedbackJsonlPath: String? = null,
     val lastChosenLabel: String? = null,
+    val lastRatingLabel: String? = null,
     val feedbackStatus: String? = null,
-    val debugLines: List<String> = listOf("Ready. Use 8-16 tokens first on emulator, then increase."),
+    val debugLines: List<String> = listOf("Ready. Native KTO trains on the Android device."),
     val error: String? = null
 )
 

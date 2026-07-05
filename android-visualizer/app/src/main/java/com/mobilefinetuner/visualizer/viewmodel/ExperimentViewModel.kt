@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobilefinetuner.sdk.MobileFineTuner
 import com.mobilefinetuner.visualizer.data.FeedbackJsonl
+import com.mobilefinetuner.visualizer.data.FedCampusBridgeClient
 import com.mobilefinetuner.visualizer.data.NativeDemoCommandBuilder
 import com.mobilefinetuner.visualizer.data.TrainingLogParser
 import com.mobilefinetuner.visualizer.model.DashboardTab
@@ -48,6 +49,12 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 class ExperimentViewModel(application: Application) : AndroidViewModel(application) {
+
+    private data class PreferenceRow(
+        val prompt: String,
+        val chosen: String,
+        val rejected: String
+    )
 
     private val resolver = application.contentResolver
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -485,98 +492,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     fun runNativeInference() {
         if (nativeInferenceJob?.isActive == true) return
         val request = _uiState.value.nativeInference
-        if (request.modelDir.isBlank()) {
-            _uiState.value = _uiState.value.copy(
-                nativeInference = request.copy(error = "Model directory is required.")
-            )
-            return
-        }
-        if (request.prompt.isBlank()) {
-            _uiState.value = _uiState.value.copy(
-                nativeInference = request.copy(error = "Prompt is required.")
-            )
-            return
-        }
-
-        _uiState.value = _uiState.value.copy(
-            nativeInference = request.copy(
-                isRunning = true,
-                output = null,
-                elapsedMs = null,
-                loadElapsedMs = null,
-                generateElapsedMs = null,
-                lastChosenLabel = null,
-                feedbackStatus = null,
-                debugLines = appendInferenceLog(
-                    request,
-                    "Single generation queued: max=${request.maxNewTokens}, temp=${formatDemoValue("%.2f", request.temperature)}, topP=${formatDemoValue("%.2f", request.topP)}."
-                ),
-                error = null
-            )
-        )
-
-        nativeInferenceJob = viewModelScope.launch(Dispatchers.IO) {
-            val startNs = System.nanoTime()
-            var loadMs = 0.0
-            var generateMs = 0.0
-            val result = runCatching {
-                val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
-                    updateNativeInferenceProgress("Using cached model session.")
-                    nativeInferenceSession!!
-                } else {
-                    closeNativeInferenceSession()
-                    updateNativeInferenceProgress("Opening model from ${request.modelDir}.")
-                    val loadStartNs = System.nanoTime()
-                    MobileFineTuner.open(request.modelDir).also { tuner ->
-                        loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
-                        nativeInferenceSession = tuner
-                        nativeInferenceModelDir = request.modelDir
-                        updateNativeInferenceProgress("Model opened in ${formatDemoValue("%.1f", loadMs)} ms.")
-                    }
-                }
-                val generateStartNs = System.nanoTime()
-                updateNativeInferenceProgress("Generating response 1/1 (${request.maxNewTokens} token max).")
-                session.generate(
-                    request.prompt,
-                    request.maxNewTokens,
-                    request.temperature.toFloat(),
-                    request.topP.toFloat(),
-                    42L
-                ).also {
-                    generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
-                }
-            }
-            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
-            val current = _uiState.value.nativeInference
-            val failure = result.exceptionOrNull()
-            if (failure != null) {
-                closeNativeInferenceSession()
-            }
-            val finalMessage = if (result.isSuccess) {
-                "Single generation finished in ${formatDemoValue("%.1f", elapsedMs)} ms."
-            } else {
-                "Single generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
-            }
-            _uiState.value = _uiState.value.copy(
-                nativeInference = current.copy(
-                    isRunning = false,
-                    modelLoaded = nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
-                    output = result.getOrNull(),
-                    elapsedMs = elapsedMs.takeIf { result.isSuccess },
-                    loadElapsedMs = loadMs.takeIf { result.isSuccess },
-                    generateElapsedMs = generateMs.takeIf { result.isSuccess },
-                    feedbackStatus = finalMessage,
-                    debugLines = appendInferenceLog(current, finalMessage),
-                    error = failure?.message ?: failure?.javaClass?.simpleName
-                )
-            )
-        }
-    }
-
-    fun runNativeInferencePair() {
-        if (nativeInferenceJob?.isActive == true) return
-        val request = _uiState.value.nativeInference
-        if (request.modelDir.isBlank()) {
+        if (!request.useFedCampusBridge && request.modelDir.isBlank()) {
             _uiState.value = _uiState.value.copy(
                 nativeInference = request.copy(error = "Model directory is required.")
             )
@@ -599,6 +515,119 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 loadElapsedMs = null,
                 generateElapsedMs = null,
                 lastChosenLabel = null,
+                lastRatingLabel = null,
+                feedbackStatus = null,
+                debugLines = appendInferenceLog(
+                    request,
+                    "Single generation queued: max=${request.maxNewTokens}, temp=${formatDemoValue("%.2f", request.temperature)}, topP=${formatDemoValue("%.2f", request.topP)}."
+                ),
+                error = null
+            )
+        )
+
+        nativeInferenceJob = viewModelScope.launch(Dispatchers.IO) {
+            val startNs = System.nanoTime()
+            var loadMs = 0.0
+            var generateMs = 0.0
+            val result = runCatching {
+                if (request.useFedCampusBridge) {
+                    updateNativeInferenceProgress("Calling FedCampus bridge at ${request.bridgeUrl}.")
+                    val bridgeStartNs = System.nanoTime()
+                    FedCampusBridgeClient.ask(
+                        baseUrl = request.bridgeUrl,
+                        query = request.prompt,
+                        referenceDate = request.referenceDate
+                    ).also { response ->
+                        generateMs = (System.nanoTime() - bridgeStartNs) / 1_000_000.0
+                        updateNativeInferenceProgress(
+                            "Bridge response from ${response.backend}; context=${response.contextChars} chars."
+                        )
+                    }.suggestion
+                } else {
+                    val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
+                        updateNativeInferenceProgress("Using cached model session.")
+                        nativeInferenceSession!!
+                    } else {
+                        closeNativeInferenceSession()
+                        updateNativeInferenceProgress("Opening model from ${request.modelDir}.")
+                        val loadStartNs = System.nanoTime()
+                        MobileFineTuner.open(request.modelDir).also { tuner ->
+                            loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
+                            nativeInferenceSession = tuner
+                            nativeInferenceModelDir = request.modelDir
+                            updateNativeInferenceProgress("Model opened in ${formatDemoValue("%.1f", loadMs)} ms.")
+                        }
+                    }
+                    val generateStartNs = System.nanoTime()
+                    updateNativeInferenceProgress("Generating response 1/1 (${request.maxNewTokens} token max).")
+                    session.generate(
+                        request.prompt,
+                        request.maxNewTokens,
+                        request.temperature.toFloat(),
+                        request.topP.toFloat(),
+                        42L
+                    ).also {
+                        generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
+                    }
+                }
+            }
+            val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
+            val current = _uiState.value.nativeInference
+            val failure = result.exceptionOrNull()
+            if (failure != null) {
+                closeNativeInferenceSession()
+            }
+            val finalMessage = if (result.isSuccess) {
+                "Single generation finished in ${formatDemoValue("%.1f", elapsedMs)} ms."
+            } else {
+                "Single generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
+            }
+            _uiState.value = _uiState.value.copy(
+                nativeInference = current.copy(
+                    isRunning = false,
+                    modelLoaded = !request.useFedCampusBridge && nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
+                    output = result.getOrNull(),
+                    candidateA = null,
+                    candidateB = null,
+                    elapsedMs = elapsedMs.takeIf { result.isSuccess },
+                    loadElapsedMs = loadMs.takeIf { result.isSuccess },
+                    generateElapsedMs = generateMs.takeIf { result.isSuccess },
+                    feedbackJsonlPath = inferenceFeedbackJsonlFile().absolutePath.takeIf { result.isSuccess },
+                    feedbackStatus = finalMessage,
+                    debugLines = appendInferenceLog(current, finalMessage),
+                    error = failure?.message ?: failure?.javaClass?.simpleName
+                )
+            )
+        }
+    }
+
+    fun runNativeInferencePair() {
+        if (nativeInferenceJob?.isActive == true) return
+        val request = _uiState.value.nativeInference
+        if (!request.useFedCampusBridge && request.modelDir.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = request.copy(error = "Model directory is required.")
+            )
+            return
+        }
+        if (request.prompt.isBlank()) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = request.copy(error = "Prompt is required.")
+            )
+            return
+        }
+
+        _uiState.value = _uiState.value.copy(
+            nativeInference = request.copy(
+                isRunning = true,
+                output = null,
+                candidateA = null,
+                candidateB = null,
+                elapsedMs = null,
+                loadElapsedMs = null,
+                generateElapsedMs = null,
+                lastChosenLabel = null,
+                lastRatingLabel = null,
                 feedbackStatus = null,
                 debugLines = appendInferenceLog(
                     request,
@@ -615,48 +644,65 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             var candidateAMs = 0.0
             var candidateBMs = 0.0
             val result = runCatching {
-                val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
-                    updateNativeInferenceProgress("Using cached model session.")
-                    nativeInferenceSession!!
+                if (request.useFedCampusBridge) {
+                    updateNativeInferenceProgress("Calling FedCampus bridge A/B at ${request.bridgeUrl}.")
+                    val pairStartNs = System.nanoTime()
+                    FedCampusBridgeClient.askPair(
+                        baseUrl = request.bridgeUrl,
+                        query = request.prompt,
+                        referenceDate = request.referenceDate
+                    ).also { response ->
+                        generateMs = (System.nanoTime() - pairStartNs) / 1_000_000.0
+                        candidateAMs = generateMs / 2.0
+                        candidateBMs = generateMs / 2.0
+                        updateNativeInferenceProgress(
+                            "Bridge A/B response from ${response.backend}; context=${response.contextChars} chars."
+                        )
+                    }.let { it.answerA to it.answerB }
                 } else {
-                    closeNativeInferenceSession()
-                    updateNativeInferenceProgress("Opening model from ${request.modelDir}.")
-                    val loadStartNs = System.nanoTime()
-                    MobileFineTuner.open(request.modelDir).also { tuner ->
-                        loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
-                        nativeInferenceSession = tuner
-                        nativeInferenceModelDir = request.modelDir
-                        updateNativeInferenceProgress("Model opened in ${formatDemoValue("%.1f", loadMs)} ms.")
+                    val session = if (nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir) {
+                        updateNativeInferenceProgress("Using cached model session.")
+                        nativeInferenceSession!!
+                    } else {
+                        closeNativeInferenceSession()
+                        updateNativeInferenceProgress("Opening model from ${request.modelDir}.")
+                        val loadStartNs = System.nanoTime()
+                        MobileFineTuner.open(request.modelDir).also { tuner ->
+                            loadMs = (System.nanoTime() - loadStartNs) / 1_000_000.0
+                            nativeInferenceSession = tuner
+                            nativeInferenceModelDir = request.modelDir
+                            updateNativeInferenceProgress("Model opened in ${formatDemoValue("%.1f", loadMs)} ms.")
+                        }
                     }
+                    val generateStartNs = System.nanoTime()
+                    updateNativeInferenceProgress("Generating candidate A (${request.maxNewTokens} token max).")
+                    val candidateAStartNs = System.nanoTime()
+                    val a = session.generate(
+                        request.prompt,
+                        request.maxNewTokens,
+                        request.temperature.toFloat(),
+                        request.topP.toFloat(),
+                        System.currentTimeMillis()
+                    )
+                    candidateAMs = (System.nanoTime() - candidateAStartNs) / 1_000_000.0
+                    updateNativeInferenceProgress(
+                        "Candidate A finished in ${formatDemoValue("%.1f", candidateAMs)} ms; generating candidate B."
+                    )
+                    val candidateBStartNs = System.nanoTime()
+                    val b = session.generate(
+                        request.prompt,
+                        request.maxNewTokens,
+                        request.temperature.toFloat(),
+                        request.topP.toFloat(),
+                        System.currentTimeMillis() + 104729L
+                    )
+                    candidateBMs = (System.nanoTime() - candidateBStartNs) / 1_000_000.0
+                    updateNativeInferenceProgress(
+                        "Candidate B finished in ${formatDemoValue("%.1f", candidateBMs)} ms."
+                    )
+                    generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
+                    a to b
                 }
-                val generateStartNs = System.nanoTime()
-                updateNativeInferenceProgress("Generating candidate A (${request.maxNewTokens} token max).")
-                val candidateAStartNs = System.nanoTime()
-                val a = session.generate(
-                    request.prompt,
-                    request.maxNewTokens,
-                    request.temperature.toFloat(),
-                    request.topP.toFloat(),
-                    System.currentTimeMillis()
-                )
-                candidateAMs = (System.nanoTime() - candidateAStartNs) / 1_000_000.0
-                updateNativeInferenceProgress(
-                    "Candidate A finished in ${formatDemoValue("%.1f", candidateAMs)} ms; generating candidate B."
-                )
-                val candidateBStartNs = System.nanoTime()
-                val b = session.generate(
-                    request.prompt,
-                    request.maxNewTokens,
-                    request.temperature.toFloat(),
-                    request.topP.toFloat(),
-                    System.currentTimeMillis() + 104729L
-                )
-                candidateBMs = (System.nanoTime() - candidateBStartNs) / 1_000_000.0
-                updateNativeInferenceProgress(
-                    "Candidate B finished in ${formatDemoValue("%.1f", candidateBMs)} ms."
-                )
-                generateMs = (System.nanoTime() - generateStartNs) / 1_000_000.0
-                a to b
             }
             val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
             val current = _uiState.value.nativeInference
@@ -673,7 +719,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.value = _uiState.value.copy(
                 nativeInference = current.copy(
                     isRunning = false,
-                    modelLoaded = nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
+                    modelLoaded = !request.useFedCampusBridge && nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
                     output = null,
                     candidateA = pair?.first,
                     candidateB = pair?.second,
@@ -758,7 +804,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 feedbackJsonlPath = file.absolutePath,
                 lastChosenLabel = normalized.takeIf { appendError == null },
                 feedbackStatus = if (appendError == null) {
-                    "Saved preference $normalized. Native DPO will use ${state.savedPairs + 1} feedback pair(s)."
+                    "Saved preference $normalized. Qwen KTO will use ${state.savedPairs + 1} feedback pair(s)."
                 } else {
                     "Failed to save preference: ${appendError.message ?: appendError.javaClass.simpleName}"
                 },
@@ -768,6 +814,84 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                         "Preference $normalized saved to ${file.name}."
                     } else {
                         "Preference save failed: ${appendError.message ?: appendError.javaClass.simpleName}."
+                    }
+                ),
+                error = appendError?.message ?: appendError?.javaClass?.simpleName
+            ),
+            nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
+                commandPreview = buildNativeDemoPreview(_uiState.value.nativeDemoConfig),
+                trainingSourceLabel = currentNativeDemoTrainingSourceLabel(),
+                trainingJsonlPath = currentNativeDemoTrainingJsonlPath(),
+                trainingPairCount = countJsonlLines(currentNativeDemoTrainingJsonlFile())
+            )
+        )
+    }
+
+    fun chooseNativeInferenceRating(desirable: Boolean) {
+        val state = _uiState.value.nativeInference
+        if (state.isRunning) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Generation is still running. Wait for the response before rating.",
+                    debugLines = appendInferenceLog(state, "Thumb rating ignored while generation is running.")
+                )
+            )
+            return
+        }
+        if (state.lastRatingLabel != null) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Rating ${state.lastRatingLabel} already saved. Generate again for another single feedback row.",
+                    debugLines = appendInferenceLog(state, "Ignored duplicate thumb rating; response already saved.")
+                )
+            )
+            return
+        }
+        val response = state.output?.takeIf { it.isNotBlank() }
+        if (response == null) {
+            _uiState.value = _uiState.value.copy(
+                nativeInference = state.copy(
+                    feedbackStatus = "Generate one response first, then tap thumbs up or down.",
+                    debugLines = appendInferenceLog(state, "Thumb rating ignored because no single response is available.")
+                )
+            )
+            return
+        }
+        val label = if (desirable) "UP" else "DOWN"
+        val file = inferenceFeedbackJsonlFile()
+        val appendError = runCatching {
+            file.parentFile?.mkdirs()
+            val line = FeedbackJsonl.encodeRating(
+                FeedbackJsonl.RatingRecord(
+                    prompt = state.prompt,
+                    response = response,
+                    desirable = desirable,
+                    sessionId = "qwen_single_${System.currentTimeMillis()}",
+                    ratingIndex = state.savedFeedbackRows,
+                    timestampMs = System.currentTimeMillis(),
+                    source = "android_qwen_inference_feedback"
+                )
+            )
+            file.appendText(line + "\n")
+        }.exceptionOrNull()
+        val nextRows = if (appendError == null) state.savedFeedbackRows + 1 else state.savedFeedbackRows
+
+        _uiState.value = _uiState.value.copy(
+            nativeInference = state.copy(
+                savedFeedbackRows = nextRows,
+                feedbackJsonlPath = file.absolutePath,
+                lastRatingLabel = label.takeIf { appendError == null },
+                feedbackStatus = if (appendError == null) {
+                    "Saved thumbs ${label.lowercase(Locale.US)}. KTO will use ${countJsonlLines(file)} feedback row(s)."
+                } else {
+                    "Failed to save rating: ${appendError.message ?: appendError.javaClass.simpleName}"
+                },
+                debugLines = appendInferenceLog(
+                    state,
+                    if (appendError == null) {
+                        "Single rating $label saved to ${file.name}."
+                    } else {
+                        "Single rating save failed: ${appendError.message ?: appendError.javaClass.simpleName}."
                     }
                 ),
                 error = appendError?.message ?: appendError?.javaClass?.simpleName
@@ -815,7 +939,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             val root = app.filesDir
             val inferenceFeedbackFile = inferenceFeedbackJsonlFile()
             val useInferenceFeedback = inferenceFeedbackFile.exists() && inferenceFeedbackFile.length() > 0L
-            val runPrefix = if (useInferenceFeedback) "phone_qwen_ab_dpo" else "phone_hf_fitness"
+            val runPrefix = if (useInferenceFeedback) "phone_qwen_feedback_kto" else "phone_hf_fitness"
             val runName = "${runPrefix}_${config.steps}s_${timestampSuffix()}"
             val runDir = File(root, "mft_runs/$runName")
             val trainFile = if (useInferenceFeedback) {
@@ -836,6 +960,126 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     writeFitnessPreferenceData(trainFile, evalFile)
                 }
                 val pairCount = countJsonlLines(trainFile)
+                val useBridgeKto = useInferenceFeedback && _uiState.value.nativeInference.useFedCampusBridge
+
+                if (useBridgeKto) {
+                    val handle = runHandleForFileRun(runName, runDir)
+                    val runs = listOf(handle) + _uiState.value.runHandles.filterNot { it.id == handle.id }
+                    val bridgeUrl = _uiState.value.nativeInference.bridgeUrl
+                    val commandPreview = "POST ${bridgeUrl.trimEnd('/')}/train_kto " +
+                        "steps=${config.steps} batch=${ktoBridgeBatchSize(config)} seq_len=${config.seqLen}"
+
+                    _uiState.value = _uiState.value.copy(
+                        activeTab = DashboardTab.EXPERIMENTS,
+                        runHandles = runs,
+                        selectedRunId = handle.id,
+                        compareRunId = _uiState.value.compareRunId?.takeIf { it != handle.id },
+                        nativeDemoRunner = NativeDemoRunnerState(
+                            status = NativeDemoRunStatus.RUNNING,
+                            currentRunName = runName,
+                            currentRunPath = runDir.absolutePath,
+                            commandPreview = commandPreview,
+                            trainingSourceLabel = "Qwen feedback KTO bridge",
+                            trainingJsonlPath = trainFile.absolutePath,
+                            trainingPairCount = pairCount,
+                            message = "Training Qwen3-0.6B KTO through the FedCampus bridge."
+                        ),
+                        error = null
+                    )
+                    startPolling()
+
+                    val response = FedCampusBridgeClient.trainKto(
+                        baseUrl = bridgeUrl,
+                        preferenceJsonl = trainFile.readText(),
+                        maxSteps = config.steps,
+                        batchSize = ktoBridgeBatchSize(config),
+                        seqLen = config.seqLen,
+                        beta = 0.1,
+                        loraRank = maxOf(2, config.rank),
+                        loraAlpha = maxOf(4, config.alpha)
+                    )
+                    File(runDir, "metrics.ndjson").writeText(response.metricsNdjson)
+                    File(runDir, "report.json").writeText(response.reportJson + "\n")
+                    File(runDir, "train.log").writeText(
+                        buildString {
+                            appendLine("[Config] Qwen3-0.6B KTO bridge run")
+                            appendLine("[Config] feedback_pairs=$pairCount train_samples=${response.trainSamples} eval_samples=${response.evalSamples}")
+                            appendLine("[Config] command=$commandPreview")
+                            append(response.stdout)
+                            if (response.stderr.isNotBlank()) {
+                                appendLine()
+                                appendLine("[stderr]")
+                                append(response.stderr)
+                            }
+                            appendLine()
+                            appendLine("[Complete] Qwen3-0.6B KTO bridge training completed.")
+                            appendLine("Total steps: ${config.steps}")
+                        }
+                    )
+
+                    _uiState.value = _uiState.value.copy(
+                        nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
+                            status = if (response.status == "ok") {
+                                NativeDemoRunStatus.COMPLETED
+                            } else {
+                                NativeDemoRunStatus.FAILED
+                            },
+                            lastExitCode = if (response.status == "ok") 0 else 1,
+                            message = "Qwen3-0.6B KTO bridge completed: ${response.trainSamples} train samples."
+                        )
+                    )
+                    startPolling()
+                    return@launch
+                }
+
+                if (useInferenceFeedback) {
+                    val handle = runHandleForFileRun(runName, runDir)
+                    val runs = listOf(handle) + _uiState.value.runHandles.filterNot { it.id == handle.id }
+                    val modelDir = _uiState.value.nativeInference.modelDir
+                    val commandPreview = "MobileFineTuner.open(${NativeDemoCommandBuilder.shellQuote(modelDir)}) " +
+                        "native_kto steps=${config.steps} batch=${nativeKtoBatchSize(config)} seq_len=${config.seqLen}"
+
+                    _uiState.value = _uiState.value.copy(
+                        activeTab = DashboardTab.EXPERIMENTS,
+                        runHandles = runs,
+                        selectedRunId = handle.id,
+                        compareRunId = _uiState.value.compareRunId?.takeIf { it != handle.id },
+                        nativeDemoRunner = NativeDemoRunnerState(
+                            status = NativeDemoRunStatus.RUNNING,
+                            currentRunName = runName,
+                            currentRunPath = runDir.absolutePath,
+                            commandPreview = commandPreview,
+                            trainingSourceLabel = "Qwen feedback native KTO",
+                            trainingJsonlPath = trainFile.absolutePath,
+                            trainingPairCount = pairCount,
+                            message = "Training Qwen KTO with the Android native C++ SDK."
+                        ),
+                        error = null
+                    )
+                    startPolling()
+
+                    val status = runNativeKtoTraining(
+                        modelDir = modelDir,
+                        trainFile = trainFile,
+                        runDir = runDir,
+                        config = config,
+                        commandPreview = commandPreview
+                    )
+
+                    _uiState.value = _uiState.value.copy(
+                        nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
+                            status = status,
+                            lastExitCode = if (status == NativeDemoRunStatus.COMPLETED) 0 else 1,
+                            message = if (status == NativeDemoRunStatus.COMPLETED) {
+                                "Native C++ KTO completed on Android."
+                            } else {
+                                "Native C++ KTO failed; check train.log."
+                            }
+                        )
+                    )
+                    startPolling()
+                    return@launch
+                }
 
                 val paths = NativeDemoCommandBuilder.Paths(
                     binaryPath = nativeDemoBinaryPath(app),
@@ -859,14 +1103,14 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                         currentRunPath = runDir.absolutePath,
                         commandPreview = command,
                         trainingSourceLabel = if (useInferenceFeedback) {
-                            "Qwen A/B feedback"
+                            "Qwen feedback"
                         } else {
                             "HF fitness preference dataset"
                         },
                         trainingJsonlPath = trainFile.absolutePath,
                         trainingPairCount = pairCount,
                         message = if (useInferenceFeedback) {
-                            "Training native DPO on saved Qwen A/B feedback."
+                            "Training native DPO fallback on saved Qwen A/B feedback."
                         } else {
                             "Training native DPO on bundled HF fitness preferences."
                         }
@@ -949,6 +1193,310 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 "-c",
                 "kill -TERM $pid 2>/dev/null; sleep 1; kill -KILL $pid 2>/dev/null"
             ).start().waitFor()
+        }
+    }
+
+    private fun ktoBridgeBatchSize(config: NativeDemoConfig): Int {
+        return if (config.steps <= 5) 4 else 2
+    }
+
+    private fun nativeKtoBatchSize(config: NativeDemoConfig): Int {
+        return if (config.steps <= 5) 4 else 2
+    }
+
+    private fun readPreferenceRows(path: File): List<PreferenceRow> {
+        return path.readLines()
+            .mapNotNull { line ->
+                if (line.isBlank()) return@mapNotNull null
+                runCatching {
+                    val json = JSONObject(line)
+                    val prompt = json.optString("prompt").trim()
+                    val chosen = json.optString("chosen").trim()
+                    val rejected = json.optString("rejected").trim()
+                    if (prompt.isBlank() || chosen.isBlank() || rejected.isBlank()) {
+                        null
+                    } else {
+                        PreferenceRow(prompt, chosen, rejected)
+                    }
+                }.getOrNull()
+            }
+    }
+
+    private fun runNativeKtoTraining(
+        modelDir: String,
+        trainFile: File,
+        runDir: File,
+        config: NativeDemoConfig,
+        commandPreview: String
+    ): NativeDemoRunStatus {
+        val rows = readPreferenceRows(trainFile)
+        val metricsFile = File(runDir, "metrics.ndjson")
+        val reportFile = File(runDir, "report.json")
+        val logFile = File(runDir, "train.log")
+        val referenceLogpsFile = File(runDir, "reference_logps.jsonl")
+        val adapterFile = File(runDir, "qwen_kto_lora_adapter.jsonl")
+        val generationFile = File(runDir, "before_after_generation.json")
+        val beforeAfterEvalFile = File(runDir, "before_after_eval.json")
+        if (rows.isEmpty()) {
+            logFile.writeText("[Error] No valid preference rows in ${trainFile.absolutePath}\n")
+            return NativeDemoRunStatus.FAILED
+        }
+
+        return try {
+            val batchSize = nativeKtoBatchSize(config)
+            val startedMs = SystemClock.elapsedRealtime()
+            logFile.writeText(
+                buildString {
+                    appendLine("[Config] Android native C++ KTO run")
+                    appendLine("[Config] model_dir=$modelDir")
+                    appendLine("[Config] feedback_pairs=${rows.size} steps=${config.steps} batch=$batchSize seq_len=${config.seqLen}")
+                    appendLine("[Config] command=$commandPreview")
+                    appendLine("[Config] reference_logps=base_model_cached")
+                }
+            )
+            metricsFile.writeText("")
+            referenceLogpsFile.writeText("")
+
+            logFile.appendText("[Stage] opening model\n")
+            MobileFineTuner.open(modelDir).use { tuner ->
+                logFile.appendText("[Stage] model opened\n")
+
+                val evalPrompt = rows.first().prompt
+                    .substringAfter("User:", rows.first().prompt)
+                    .substringBefore("\nAssistant:", rows.first().prompt)
+                    .trim()
+                    .ifBlank { rows.first().prompt.take(240) }
+                logFile.appendText("[Stage] before-training inference start\n")
+                val beforeGeneration = runCatching {
+                    tuner.generate(evalPrompt, 8, 0.0f, 1.0f, 7L)
+                }.getOrElse { error ->
+                    "[generation_error] ${error.message ?: error.javaClass.simpleName}"
+                }
+                logFile.appendText("[Stage] before-training inference done\n")
+
+                val cachedRefChosen = FloatArray(rows.size)
+                val cachedRefRejected = FloatArray(rows.size)
+                var cachedValidResponseTokens = 0
+                val evalPairCount = minOf(10, rows.size)
+                logFile.appendText("[Stage] caching base-model reference logps for ${rows.size} preference pairs\n")
+                for (start in rows.indices step batchSize) {
+                    val end = minOf(start + batchSize, rows.size)
+                    val batchRows = rows.subList(start, end)
+                    val scores = tuner.scorePreferenceBatch(
+                        batchRows.map { it.prompt }.toTypedArray(),
+                        batchRows.map { it.chosen }.toTypedArray(),
+                        batchRows.map { it.rejected }.toTypedArray(),
+                        config.seqLen,
+                        true
+                    )
+                    cachedValidResponseTokens += scores.validResponseTokenCount
+                    for (i in batchRows.indices) {
+                        val rowIndex = start + i
+                        cachedRefChosen[rowIndex] = scores.chosenLogps[i]
+                        cachedRefRejected[rowIndex] = scores.rejectedLogps[i]
+                        referenceLogpsFile.appendText(
+                            JSONObject()
+                                .put("index", rowIndex)
+                                .put("ref_chosen_logp", scores.chosenLogps[i])
+                                .put("ref_rejected_logp", scores.rejectedLogps[i])
+                                .toString() + "\n"
+                        )
+                    }
+                    logFile.appendText("[Stage] cached reference logps $end/${rows.size}\n")
+                }
+                val beforeEvalSummary = summarizePreferenceScores(
+                    cachedRefChosen.copyOfRange(0, evalPairCount),
+                    cachedRefRejected.copyOfRange(0, evalPairCount)
+                )
+                logFile.appendText(
+                    "[Eval before] pairs=${beforeEvalSummary.pairCount} " +
+                        "accuracy=${beforeEvalSummary.accuracy} margin=${beforeEvalSummary.meanMargin}\n"
+                )
+
+                logFile.appendText("[Stage] initializing LoRA\n")
+                tuner.initLora(
+                    MobileFineTuner.LoraConfig(
+                        maxOf(2, config.rank),
+                        maxOf(4, config.alpha).toFloat(),
+                        0.0f,
+                        42L,
+                        arrayOf("q_proj", "k_proj", "v_proj", "o_proj")
+                    )
+                )
+                logFile.appendText("[Stage] LoRA initialized\n")
+                logFile.appendText("[Stage] creating KTO trainer\n")
+                tuner.createKtoTrainer(
+                    MobileFineTuner.KtoTrainerConfig(
+                        config.learningRate.toFloat(),
+                        0.0f,
+                        1.0f,
+                        0.1f,
+                        1.0f,
+                        1.0f,
+                        true,
+                        1
+                    )
+                )
+                logFile.appendText("[Stage] KTO trainer ready\n")
+
+                var first: MobileFineTuner.KtoStepResult? = null
+                var last: MobileFineTuner.KtoStepResult? = null
+                for (step in 1..config.steps) {
+                    val batchIndices = (0 until batchSize).map { (step - 1 + it) % rows.size }
+                    val batch = batchIndices.map { rows[it] }
+                    val refChosen = FloatArray(batch.size) { cachedRefChosen[batchIndices[it]] }
+                    val refRejected = FloatArray(batch.size) { cachedRefRejected[batchIndices[it]] }
+                    val stepStartMs = SystemClock.elapsedRealtime()
+                    logFile.appendText("[Stage] step $step/${config.steps} start\n")
+                    val result = tuner.trainKtoPreferenceBatch(
+                        batch.map { it.prompt }.toTypedArray(),
+                        batch.map { it.chosen }.toTypedArray(),
+                        batch.map { it.rejected }.toTypedArray(),
+                        refChosen,
+                        refRejected,
+                        config.seqLen,
+                        true
+                    )
+                    val elapsedMs = SystemClock.elapsedRealtime() - stepStartMs
+                    if (first == null) {
+                        first = result
+                    }
+                    last = result
+                    val row = JSONObject()
+                        .put("step", step)
+                        .put("source", "android_native_kto")
+                        .put("batch_size", batchSize)
+                        .put("train_samples", rows.size * 2)
+                        .put("feedback_pairs", rows.size)
+                        .put("policy_trainable_params", result.trainableTensorCount)
+                        .put("policy_nonzero_grad_params", result.trainableTensorCount)
+                        .put("policy_frozen_params_with_grad", 0)
+                        .put("reference_grad_params", 0)
+                        .put("loss", result.loss)
+                        .put("reward_accuracy", result.rewardAccuracy)
+                        .put("reward_margin", result.rewardMargin)
+                        .put("desirable_reward", result.desirableReward)
+                        .put("undesirable_reward", result.undesirableReward)
+                        .put("kl_center", 0.0)
+                        .put("sample_count", result.sampleCount)
+                        .put("pair_count", result.pairCount)
+                        .put("valid_response_tokens", result.validResponseTokenCount)
+                        .put("elapsed_ms", elapsedMs)
+                        .put("reference_logps", "base_model_cached")
+                    metricsFile.appendText(row.toString() + "\n")
+                    logFile.appendText(
+                        "[step $step/${config.steps}] loss=${result.loss} " +
+                            "reward_acc=${result.rewardAccuracy} reward_margin=${result.rewardMargin} " +
+                            "samples=${result.sampleCount} time_ms=$elapsedMs\n"
+                    )
+                }
+
+                logFile.appendText("[Stage] saving LoRA adapter to ${adapterFile.absolutePath}\n")
+                tuner.saveLoraAdapter(adapterFile)
+                logFile.appendText("[Stage] loading saved LoRA adapter for device-side round trip\n")
+                tuner.loadLoraAdapter(adapterFile)
+                logFile.appendText("[Stage] after-training inference start\n")
+                val afterGeneration = runCatching {
+                    tuner.generate(evalPrompt, 8, 0.0f, 1.0f, 7L)
+                }.getOrElse { error ->
+                    "[generation_error] ${error.message ?: error.javaClass.simpleName}"
+                }
+                val firstResult = first ?: error("KTO trainer produced no steps")
+                val finalResult = last ?: error("KTO trainer produced no steps")
+                val trendAccuracyDelta = finalResult.rewardAccuracy.toDouble() - firstResult.rewardAccuracy.toDouble()
+                val trendMarginDelta = finalResult.rewardMargin.toDouble() - firstResult.rewardMargin.toDouble()
+                beforeAfterEvalFile.writeText(
+                    JSONObject()
+                        .put("eval_pairs", evalPairCount)
+                        .put("method", "reference_before_plus_training_reward_trend")
+                        .put("reference_before", JSONObject()
+                            .put("accuracy", beforeEvalSummary.accuracy)
+                            .put("mean_margin", beforeEvalSummary.meanMargin)
+                        )
+                        .put("train_reward_trend", JSONObject()
+                            .put("first_step", JSONObject()
+                                .put("accuracy", firstResult.rewardAccuracy)
+                                .put("mean_margin", firstResult.rewardMargin)
+                            )
+                            .put("final_step", JSONObject()
+                                .put("accuracy", finalResult.rewardAccuracy)
+                                .put("mean_margin", finalResult.rewardMargin)
+                            )
+                            .put("delta", JSONObject()
+                                .put("accuracy", trendAccuracyDelta)
+                                .put("mean_margin", trendMarginDelta)
+                            )
+                        )
+                        .toString(2) + "\n"
+                )
+                logFile.appendText(
+                    "[Trend] first_step_acc=${firstResult.rewardAccuracy} final_step_acc=${finalResult.rewardAccuracy} " +
+                        "first_step_margin=${firstResult.rewardMargin} final_step_margin=${finalResult.rewardMargin} " +
+                        "margin_delta=$trendMarginDelta\n"
+                )
+                generationFile.writeText(
+                    JSONObject()
+                        .put("prompt", evalPrompt)
+                        .put("before_training", beforeGeneration)
+                        .put("after_training_loaded_adapter", afterGeneration)
+                        .put("max_new_tokens", 8)
+                        .toString(2) + "\n"
+                )
+
+                val totalMs = SystemClock.elapsedRealtime() - startedMs
+                val report = JSONObject()
+                    .put("status", "ok")
+                    .put("backend", "android_native_cpp")
+                    .put("objective", "kto")
+                    .put("model_dir", modelDir)
+                    .put("train_samples", rows.size * 2)
+                    .put("feedback_pairs", rows.size)
+                    .put("max_steps", config.steps)
+                    .put("batch_size", batchSize)
+                    .put("beta", 0.1)
+                    .put("lora_rank", maxOf(2, config.rank))
+                    .put("lora_alpha", maxOf(4, config.alpha))
+                    .put("reference_logps_path", referenceLogpsFile.absolutePath)
+                    .put("cached_reference_pairs", rows.size)
+                    .put("cached_reference_valid_response_tokens", cachedValidResponseTokens)
+                    .put("lora_adapter_path", adapterFile.absolutePath)
+                    .put("before_after_generation_path", generationFile.absolutePath)
+                    .put("before_after_eval_path", beforeAfterEvalFile.absolutePath)
+                    .put("before_after_eval_method", "reference_before_plus_training_reward_trend")
+                    .put("eval_pairs", evalPairCount)
+                    .put("eval_accuracy_before", beforeEvalSummary.accuracy)
+                    .put("eval_margin_before", beforeEvalSummary.meanMargin)
+                    .put("trend_accuracy_before", firstResult.rewardAccuracy)
+                    .put("trend_accuracy_after", finalResult.rewardAccuracy)
+                    .put("trend_accuracy_delta", trendAccuracyDelta)
+                    .put("trend_margin_before", firstResult.rewardMargin)
+                    .put("trend_margin_after", finalResult.rewardMargin)
+                    .put("trend_margin_delta", trendMarginDelta)
+                    .put("last_train_metrics", JSONObject()
+                        .put("loss", finalResult.loss)
+                        .put("reward_accuracy", finalResult.rewardAccuracy)
+                        .put("reward_margin", finalResult.rewardMargin)
+                        .put("desirable_reward", finalResult.desirableReward)
+                        .put("undesirable_reward", finalResult.undesirableReward)
+                        .put("policy_trainable_params", finalResult.trainableTensorCount)
+                        .put("sample_count", finalResult.sampleCount)
+                    )
+                    .put("total_elapsed_ms", totalMs)
+                reportFile.writeText(report.toString(2) + "\n")
+                logFile.appendText("[Complete] Android native C++ KTO completed in ${totalMs}ms.\n")
+            }
+            NativeDemoRunStatus.COMPLETED
+        } catch (t: Throwable) {
+            logFile.appendText("[Error] ${t.message ?: t.javaClass.simpleName}\n")
+            reportFile.writeText(
+                JSONObject()
+                    .put("status", "failed")
+                    .put("backend", "android_native_cpp")
+                    .put("objective", "kto")
+                    .put("error", t.message ?: t.javaClass.simpleName)
+                    .toString(2) + "\n"
+            )
+            NativeDemoRunStatus.FAILED
         }
     }
 
@@ -1553,7 +2101,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     private fun currentNativeDemoTrainingSourceLabel(): String {
         val feedback = inferenceFeedbackJsonlFile()
         return if (feedback.exists() && feedback.length() > 0L) {
-            "Qwen A/B feedback"
+            "Qwen feedback"
         } else {
             "HF fitness preference dataset"
         }
@@ -1562,7 +2110,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     private fun countJsonlLines(file: File): Int {
         if (!file.exists() || file.length() == 0L) return 0
         return runCatching {
-            file.useLines { lines -> lines.count { it.isNotBlank() } }
+            val lines = file.readLines().filter { it.isNotBlank() }
+            val ktoRows = FeedbackJsonl.countKtoRows(lines)
+            if (ktoRows > 0) ktoRows else lines.size
         }.getOrDefault(0)
     }
 
