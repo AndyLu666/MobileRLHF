@@ -50,19 +50,24 @@ data class DemoLiveProgressState(
     val message: String
 )
 
+fun displayFeedbackRows(
+    inference: NativeInferenceState,
+    runner: NativeDemoRunnerState
+): Int {
+    return maxOf(inference.savedFeedbackRows, inference.savedPairs, runner.trainingPairCount)
+}
+
 fun buildDemoWorkflowSteps(
     inference: NativeInferenceState,
     runner: NativeDemoRunnerState,
     snapshot: RunSnapshot?
 ): List<DemoWorkflowStepState> {
+    val feedbackRows = displayFeedbackRows(inference, runner)
     val hasGenerated = inference.candidateA != null ||
         inference.candidateB != null ||
         inference.output != null ||
-        inference.savedPairs > 0 ||
-        inference.savedFeedbackRows > 0
-    val hasPreference = inference.savedFeedbackRows > 0 ||
-        inference.savedPairs > 0 ||
-        runner.trainingPairCount > 0
+        feedbackRows > 0
+    val hasPreference = feedbackRows > 0
     val isTraining = runner.status == NativeDemoRunStatus.RUNNING ||
         runner.status == NativeDemoRunStatus.STOPPING
     val trainDone = runner.status == NativeDemoRunStatus.COMPLETED ||

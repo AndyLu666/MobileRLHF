@@ -55,6 +55,16 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun displayFeedbackRowsUsesTrainingFileCountWhenPreloadedByAdb() {
+        val rows = displayFeedbackRows(
+            inference = NativeInferenceState(savedFeedbackRows = 0, savedPairs = 0),
+            runner = NativeDemoRunnerState(trainingPairCount = 2)
+        )
+
+        assertThat(rows).isEqualTo(2)
+    }
+
+    @Test
     fun liveProgressFormatsCurrentStepFromSnapshot() {
         val progress = buildDemoLiveProgressState(
             snapshot = demoSnapshot(

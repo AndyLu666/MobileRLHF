@@ -1725,6 +1725,7 @@ private fun PaperDemoConsole(
         item {
             PaperGeneratePreferPanel(
                 state = inference,
+                runner = runner,
                 onStateChange = onInferenceChange,
                 onGenerateSingle = onGenerateSingle,
                 onGeneratePair = onGeneratePair,
@@ -1908,6 +1909,7 @@ private fun WorkflowStepPill(
 @Composable
 private fun PaperGeneratePreferPanel(
     state: NativeInferenceState,
+    runner: NativeDemoRunnerState,
     onStateChange: (NativeInferenceState) -> Unit,
     onGenerateSingle: () -> Unit,
     onGeneratePair: () -> Unit,
@@ -1916,6 +1918,7 @@ private fun PaperGeneratePreferPanel(
 ) {
     val mode = buildFeedbackModeState(state)
     val isPairMode = state.feedbackMode == NativeFeedbackMode.PAIR
+    val feedbackRows = displayFeedbackRows(state, runner)
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -1944,8 +1947,8 @@ private fun PaperGeneratePreferPanel(
                 )
                 MiniMetricChip(
                     label = "KTO Rows",
-                    value = state.savedFeedbackRows.toString(),
-                    accent = if (state.savedFeedbackRows > 0) NeonGreen else NeonAmber,
+                    value = feedbackRows.toString(),
+                    accent = if (feedbackRows > 0) NeonGreen else NeonAmber,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -2219,7 +2222,7 @@ private fun PaperKtoTrainingPanel(
         ) {
             SectionHeader(
                 title = "2. Train KTO on Android",
-                subtitle = runner.message ?: "Use saved A/B feedback to update the local LoRA adapter."
+                subtitle = runner.message ?: "Use saved A/B or single-rating feedback to update the local LoRA adapter."
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2227,7 +2230,7 @@ private fun PaperKtoTrainingPanel(
                 maxItemsInEachRow = 3
             ) {
                 MiniMetricChip(label = "Dataset", value = runner.trainingSourceLabel, accent = NeonGreen, modifier = Modifier.weight(1f))
-                MiniMetricChip(label = "Pairs", value = if (runner.trainingPairCount > 0) runner.trainingPairCount.toString() else "Bundled", accent = NeonBlue, modifier = Modifier.weight(1f))
+                MiniMetricChip(label = "KTO Rows", value = if (runner.trainingPairCount > 0) runner.trainingPairCount.toString() else "Bundled", accent = NeonBlue, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Run", value = runner.currentRunName ?: "Ready", accent = RssColor, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Steps", value = "${config.steps}", accent = LrColor, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Batch", value = "2", accent = NeonAmber, modifier = Modifier.weight(1f))
@@ -2411,7 +2414,7 @@ private fun PaperEvidencePanel(evidence: DemoEvidenceState) {
             ) {
                 PaperEvidenceMetric("Objective", evidence.objective, NeonBlue, Modifier.weight(1f))
                 PaperEvidenceMetric("Model", evidence.model, RssColor, Modifier.weight(1f))
-                PaperEvidenceMetric("Pairs", evidence.pairs, NeonGreen, Modifier.weight(1f))
+                PaperEvidenceMetric("KTO Rows", evidence.pairs, NeonGreen, Modifier.weight(1f))
                 PaperEvidenceMetric("Steps", evidence.steps, LrColor, Modifier.weight(1f))
                 PaperEvidenceMetric("Batch", evidence.batch, NeonAmber, Modifier.weight(1f))
                 PaperEvidenceMetric("Loss", evidence.loss, LossColor, Modifier.weight(1f))
@@ -3110,7 +3113,7 @@ private fun NativeDemoRunnerCard(
                     modifier = Modifier.weight(1f)
                 )
                 MiniMetricChip(
-                    label = "Pairs",
+                    label = "KTO Rows",
                     value = if (runner.trainingPairCount > 0) runner.trainingPairCount.toString() else "Bundled",
                     accent = if (usingFeedback) NeonGreen else RssColor,
                     modifier = Modifier.weight(1f)
