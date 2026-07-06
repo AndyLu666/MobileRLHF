@@ -16,6 +16,16 @@ enum class DemoWorkflowStatus {
     DONE
 }
 
+enum class PaperModeSection {
+    HERO,
+    WORKFLOW,
+    ADVANCED_TOGGLE,
+    DATA_CONTROLS,
+    TRAINING_CONTROLS,
+    LIVE_EVIDENCE,
+    PAPER_EVIDENCE
+}
+
 data class DemoWorkflowStepState(
     val label: String,
     val status: DemoWorkflowStatus
@@ -100,6 +110,23 @@ fun displayFeedbackRows(
     runner: NativeDemoRunnerState
 ): Int {
     return maxOf(inference.savedFeedbackRows, inference.savedPairs, runner.trainingPairCount)
+}
+
+fun buildPaperModeSections(showAdvanced: Boolean): List<PaperModeSection> {
+    val defaultSections = listOf(
+        PaperModeSection.HERO,
+        PaperModeSection.WORKFLOW,
+        PaperModeSection.ADVANCED_TOGGLE
+    )
+    if (!showAdvanced) {
+        return defaultSections
+    }
+    return defaultSections + listOf(
+        PaperModeSection.DATA_CONTROLS,
+        PaperModeSection.TRAINING_CONTROLS,
+        PaperModeSection.LIVE_EVIDENCE,
+        PaperModeSection.PAPER_EVIDENCE
+    )
 }
 
 fun buildPaperDemoSummaryState(

@@ -1699,29 +1699,70 @@ private fun PaperDemoConsole(
         compareRunName = runs.firstOrNull { it.id == compareRunId }?.name,
         runner = runner
     )
+    var showAdvanced by remember { mutableStateOf(false) }
+    val sections = buildPaperModeSections(showAdvanced)
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        item {
-            PaperConsoleHeader(
-                summary = summary,
-                primaryAction = primaryAction,
-                chartPreview = chartPreview,
-                selectedRun = runLabels.selectedRun,
-                compareRun = runLabels.compareRun,
-                runner = runner,
-                onPickDirectory = onPickDirectory,
-                onEnableDemo = onEnableDemo,
-                onEnableDpoTest = onEnableDpoTest,
-                onStart = onStart,
-                onStop = onStop
-            )
-        }
-        item {
-            WorkflowStrip(steps = workflowSteps)
+        sections.forEach { section ->
+            when (section) {
+                PaperModeSection.HERO -> item {
+                    PaperConsoleHeader(
+                        summary = summary,
+                        primaryAction = primaryAction,
+                        chartPreview = chartPreview,
+                        runner = runner,
+                        onEnableDpoTest = onEnableDpoTest,
+                        onStart = onStart,
+                        onStop = onStop
+                    )
+                }
+                PaperModeSection.WORKFLOW -> item {
+                    WorkflowStrip(steps = workflowSteps)
+                }
+                PaperModeSection.ADVANCED_TOGGLE -> item {
+                    PaperAdvancedToggle(
+                        expanded = showAdvanced,
+                        selectedRun = runLabels.selectedRun,
+                        compareRun = runLabels.compareRun,
+                        onToggle = { showAdvanced = !showAdvanced },
+                        onPickDirectory = onPickDirectory,
+                        onEnableDemo = onEnableDemo,
+                        onEnableDpoTest = onEnableDpoTest
+                    )
+                }
+                PaperModeSection.DATA_CONTROLS -> item {
+                    PaperGeneratePreferPanel(
+                        state = inference,
+                        runner = runner,
+                        input = input,
+                        onStateChange = onInferenceChange,
+                        onGenerateSingle = onGenerateSingle,
+                        onGeneratePair = onGeneratePair,
+                        onChooseCandidate = onChooseCandidate,
+                        onChooseRating = onChooseRating
+                    )
+                }
+                PaperModeSection.TRAINING_CONTROLS -> item {
+                    PaperKtoTrainingPanel(
+                        config = config,
+                        runner = runner,
+                        snapshot = snapshot,
+                        onConfigChange = onConfigChange,
+                        onStart = onStart,
+                        onStop = onStop
+                    )
+                }
+                PaperModeSection.LIVE_EVIDENCE -> item {
+                    PaperLiveProgressPanel(snapshot = snapshot)
+                }
+                PaperModeSection.PAPER_EVIDENCE -> item {
+                    PaperEvidencePanel(evidence = evidence)
+                }
+            }
         }
         if (feedbackSession != null && !feedbackSession.isComplete) {
             item {
@@ -1730,34 +1771,6 @@ private fun PaperDemoConsole(
                     onChoose = onChooseFeedback
                 )
             }
-        }
-        item {
-            PaperGeneratePreferPanel(
-                state = inference,
-                runner = runner,
-                input = input,
-                onStateChange = onInferenceChange,
-                onGenerateSingle = onGenerateSingle,
-                onGeneratePair = onGeneratePair,
-                onChooseCandidate = onChooseCandidate,
-                onChooseRating = onChooseRating
-            )
-        }
-        item {
-            PaperKtoTrainingPanel(
-                config = config,
-                runner = runner,
-                snapshot = snapshot,
-                onConfigChange = onConfigChange,
-                onStart = onStart,
-                onStop = onStop
-            )
-        }
-        item {
-            PaperLiveProgressPanel(snapshot = snapshot)
-        }
-        item {
-            PaperEvidencePanel(evidence = evidence)
         }
     }
 }
@@ -1768,11 +1781,7 @@ private fun PaperConsoleHeader(
     summary: PaperDemoSummaryState,
     primaryAction: DemoPrimaryActionState,
     chartPreview: DemoChartPreviewState,
-    selectedRun: String,
-    compareRun: String,
     runner: NativeDemoRunnerState,
-    onPickDirectory: () -> Unit,
-    onEnableDemo: () -> Unit,
     onEnableDpoTest: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
@@ -1873,52 +1882,85 @@ private fun PaperConsoleHeader(
                     modifier = Modifier.weight(1f)
                 )
             }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                maxItemsInEachRow = 3
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperAdvancedToggle(
+    expanded: Boolean,
+    selectedRun: String,
+    compareRun: String,
+    onToggle: () -> Unit,
+    onPickDirectory: () -> Unit,
+    onEnableDemo: () -> Unit,
+    onEnableDpoTest: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onToggle,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)
             ) {
-                Button(
-                    onClick = onPickDirectory,
-                    enabled = !running,
-                    modifier = Modifier.weight(1f).heightIn(min = 44.dp)
-                ) {
-                    Icon(Icons.Rounded.FolderOpen, contentDescription = null)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Runs", maxLines = 1)
-                }
-                OutlinedButton(
-                    onClick = onEnableDemo,
-                    enabled = !running,
-                    modifier = Modifier.weight(1f).heightIn(min = 44.dp)
-                ) {
-                    Text("Load Demo", maxLines = 1)
-                }
-                OutlinedButton(
-                    onClick = onEnableDpoTest,
-                    enabled = !running,
-                    modifier = Modifier.weight(1f).heightIn(min = 44.dp)
-                ) {
-                    Text("DPO Data", maxLines = 1)
-                }
+                Text(if (expanded) "Hide Advanced / Debug Controls" else "Show Advanced / Debug Controls")
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(Icons.Rounded.ExpandMore, contentDescription = null)
             }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                maxItemsInEachRow = 2
-            ) {
-                MiniMetricChip(
-                    label = "Selected Run",
-                    value = selectedRun,
-                    accent = NeonBlue,
-                    modifier = Modifier.weight(1f)
-                )
-                MiniMetricChip(
-                    label = "Compare",
-                    value = compareRun,
-                    accent = RssColor,
-                    modifier = Modifier.weight(1f)
-                )
+            if (expanded) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 3
+                ) {
+                    Button(
+                        onClick = onPickDirectory,
+                        modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                    ) {
+                        Icon(Icons.Rounded.FolderOpen, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Runs", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onEnableDemo,
+                        modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                    ) {
+                        Text("Load Demo", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onEnableDpoTest,
+                        modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                    ) {
+                        Text("DPO Data", maxLines = 1)
+                    }
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    maxItemsInEachRow = 2
+                ) {
+                    MiniMetricChip(
+                        label = "Selected Run",
+                        value = selectedRun,
+                        accent = NeonBlue,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MiniMetricChip(
+                        label = "Compare",
+                        value = compareRun,
+                        accent = RssColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }

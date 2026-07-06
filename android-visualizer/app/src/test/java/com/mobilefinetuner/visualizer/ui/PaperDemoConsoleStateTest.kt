@@ -207,6 +207,32 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun paperModeKeepsDebugSectionsOutOfDefaultView() {
+        val sections = buildPaperModeSections(showAdvanced = false)
+
+        assertThat(sections).containsExactly(
+            PaperModeSection.HERO,
+            PaperModeSection.WORKFLOW,
+            PaperModeSection.ADVANCED_TOGGLE
+        ).inOrder()
+    }
+
+    @Test
+    fun paperModeShowsDebugSectionsOnlyWhenExpanded() {
+        val sections = buildPaperModeSections(showAdvanced = true)
+
+        assertThat(sections).containsExactly(
+            PaperModeSection.HERO,
+            PaperModeSection.WORKFLOW,
+            PaperModeSection.ADVANCED_TOGGLE,
+            PaperModeSection.DATA_CONTROLS,
+            PaperModeSection.TRAINING_CONTROLS,
+            PaperModeSection.LIVE_EVIDENCE,
+            PaperModeSection.PAPER_EVIDENCE
+        ).inOrder()
+    }
+
+    @Test
     fun liveProgressFormatsCurrentStepFromSnapshot() {
         val progress = buildDemoLiveProgressState(
             snapshot = demoSnapshot(
