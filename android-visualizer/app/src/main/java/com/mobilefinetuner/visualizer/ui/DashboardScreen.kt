@@ -121,6 +121,7 @@ fun DashboardScreen(
     modifier: Modifier = Modifier
 ) {
     val ui by viewModel.uiState.collectAsState()
+    val appBackground = Color(0xFFF6F7F9)
     val tabOrder = remember {
         listOf(
             DashboardTab.EXPERIMENTS,
@@ -140,14 +141,14 @@ fun DashboardScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFFF6F7F9))
+            .background(appBackground)
     ) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
-            containerColor = Color.Transparent,
+            containerColor = appBackground,
             topBar = {
                 TopAppBar(
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = appBackground),
                     title = {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
