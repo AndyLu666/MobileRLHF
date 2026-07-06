@@ -35,6 +35,23 @@ data class DemoEvidenceState(
     val artifacts: String
 )
 
+data class PaperDemoSummaryState(
+    val title: String,
+    val subtitle: String,
+    val dataStatus: String,
+    val trainingStatus: String,
+    val peakMemory: String,
+    val adapterStatus: String
+)
+
+data class DemoInputState(
+    val title: String,
+    val subtitle: String,
+    val formatLabel: String,
+    val rowLabel: String,
+    val statusLabel: String
+)
+
 data class FeedbackModeUiState(
     val selectedLabel: String,
     val actionLabel: String,
@@ -57,16 +74,56 @@ fun displayFeedbackRows(
     return maxOf(inference.savedFeedbackRows, inference.savedPairs, runner.trainingPairCount)
 }
 
+fun buildPaperDemoSummaryState(
+    config: NativeDemoConfig,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?
+): PaperDemoSummaryState {
+    val rows = runner.trainingPairCount
+    val peakMemory = snapshot?.metrics.orEmpty().mapNotNull { it.rssMb }.maxOrNull()
+        ?: snapshot?.summary?.maxTrainRssMb
+    val completed = runner.status == NativeDemoRunStatus.COMPLETED ||
+        snapshot?.status?.name == "COMPLETED"
+    return PaperDemoSummaryState(
+        title = "Qwen3-0.6B On-device KTO",
+        subtitle = "Data -> Train KTO -> Evidence",
+        dataStatus = if (rows > 0) "DPO/KTO data ready" else "Waiting for data",
+        trainingStatus = when {
+            runner.status == NativeDemoRunStatus.RUNNING -> "KTO running"
+            completed -> "KTO completed"
+            else -> "${config.steps} steps ready"
+        },
+        peakMemory = peakMemory?.let { "${formatDemoMetric(it, digits = 1)} MB" } ?: "RSS pending",
+        adapterStatus = if (completed) "Adapter saved" else "Adapter pending"
+    )
+}
+
+fun buildDemoInputState(
+    inference: NativeInferenceState,
+    runner: NativeDemoRunnerState
+): DemoInputState {
+    val rows = displayFeedbackRows(inference, runner)
+    val format = when {
+        inference.savedPairs > 0 -> "DPO pairs -> KTO"
+        inference.savedFeedbackRows > 0 -> "App thumbs -> KTO"
+        runner.trainingPairCount > 0 -> "KTO binary / DPO ready"
+        else -> "DPO or KTO JSONL"
+    }
+    return DemoInputState(
+        title = "1. Data",
+        subtitle = "Use DPO chosen/rejected, KTO binary labels, or app thumbs.",
+        formatLabel = format,
+        rowLabel = if (rows > 0) "$rows KTO rows" else "No rows",
+        statusLabel = if (rows > 0) "Ready" else "Needs data"
+    )
+}
+
 fun buildDemoWorkflowSteps(
     inference: NativeInferenceState,
     runner: NativeDemoRunnerState,
     snapshot: RunSnapshot?
 ): List<DemoWorkflowStepState> {
     val feedbackRows = displayFeedbackRows(inference, runner)
-    val hasGenerated = inference.candidateA != null ||
-        inference.candidateB != null ||
-        inference.output != null ||
-        feedbackRows > 0
     val hasPreference = feedbackRows > 0
     val isTraining = runner.status == NativeDemoRunStatus.RUNNING ||
         runner.status == NativeDemoRunStatus.STOPPING
@@ -78,23 +135,14 @@ fun buildDemoWorkflowSteps(
 
     return listOf(
         DemoWorkflowStepState(
-            label = "Generate",
-            status = when {
-                inference.isRunning -> DemoWorkflowStatus.RUNNING
-                hasGenerated -> DemoWorkflowStatus.DONE
-                else -> DemoWorkflowStatus.READY
-            }
-        ),
-        DemoWorkflowStepState(
-            label = "Prefer",
+            label = "Data",
             status = when {
                 hasPreference -> DemoWorkflowStatus.SAVED
-                hasGenerated -> DemoWorkflowStatus.READY
                 else -> DemoWorkflowStatus.NEEDS_INPUT
             }
         ),
         DemoWorkflowStepState(
-            label = "Train",
+            label = "Train KTO",
             status = when {
                 isTraining -> DemoWorkflowStatus.RUNNING
                 trainDone -> DemoWorkflowStatus.DONE

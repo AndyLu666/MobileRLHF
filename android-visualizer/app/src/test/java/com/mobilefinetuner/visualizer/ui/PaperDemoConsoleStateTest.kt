@@ -21,11 +21,10 @@ class PaperDemoConsoleStateTest {
             snapshot = null
         )
 
-        assertThat(steps.map { it.label }).containsExactly("Generate", "Prefer", "Train", "Evidence").inOrder()
-        assertThat(steps[0].status).isEqualTo(DemoWorkflowStatus.DONE)
-        assertThat(steps[1].status).isEqualTo(DemoWorkflowStatus.SAVED)
-        assertThat(steps[2].status).isEqualTo(DemoWorkflowStatus.READY)
-        assertThat(steps[3].status).isEqualTo(DemoWorkflowStatus.NEEDS_INPUT)
+        assertThat(steps.map { it.label }).containsExactly("Data", "Train KTO", "Evidence").inOrder()
+        assertThat(steps[0].status).isEqualTo(DemoWorkflowStatus.SAVED)
+        assertThat(steps[1].status).isEqualTo(DemoWorkflowStatus.READY)
+        assertThat(steps[2].status).isEqualTo(DemoWorkflowStatus.NEEDS_INPUT)
     }
 
     @Test
@@ -36,9 +35,8 @@ class PaperDemoConsoleStateTest {
             snapshot = null
         )
 
-        assertThat(steps[0].status).isEqualTo(DemoWorkflowStatus.DONE)
-        assertThat(steps[1].status).isEqualTo(DemoWorkflowStatus.SAVED)
-        assertThat(steps[2].status).isEqualTo(DemoWorkflowStatus.READY)
+        assertThat(steps[0].status).isEqualTo(DemoWorkflowStatus.SAVED)
+        assertThat(steps[1].status).isEqualTo(DemoWorkflowStatus.READY)
     }
 
     @Test
@@ -62,6 +60,42 @@ class PaperDemoConsoleStateTest {
         )
 
         assertThat(rows).isEqualTo(2)
+    }
+
+    @Test
+    fun inputStateLabelsDpoPairsAsKtoReady() {
+        val input = buildDemoInputState(
+            inference = NativeInferenceState(savedPairs = 12),
+            runner = NativeDemoRunnerState(trainingPairCount = 24)
+        )
+
+        assertThat(input.title).isEqualTo("1. Data")
+        assertThat(input.formatLabel).isEqualTo("DPO pairs -> KTO")
+        assertThat(input.rowLabel).isEqualTo("24 KTO rows")
+        assertThat(input.statusLabel).isEqualTo("Ready")
+    }
+
+    @Test
+    fun paperSummaryHighlightsKtoTrainingAndPeakMemory() {
+        val summary = buildPaperDemoSummaryState(
+            config = NativeDemoConfig(steps = 10),
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.COMPLETED,
+                trainingPairCount = 24,
+                trainingSourceLabel = "Qwen feedback native KTO"
+            ),
+            snapshot = demoSnapshot(
+                loss = 0.3949413,
+                rewardAccuracy = 1.0,
+                rewardMargin = 0.88533133,
+                rssMb = 5289.6328125
+            )
+        )
+
+        assertThat(summary.title).isEqualTo("Qwen3-0.6B On-device KTO")
+        assertThat(summary.dataStatus).isEqualTo("DPO/KTO data ready")
+        assertThat(summary.trainingStatus).isEqualTo("KTO completed")
+        assertThat(summary.peakMemory).isEqualTo("5289.6 MB")
     }
 
     @Test
@@ -104,8 +138,8 @@ class PaperDemoConsoleStateTest {
             )
         )
 
+        assertThat(steps[1].status).isEqualTo(DemoWorkflowStatus.DONE)
         assertThat(steps[2].status).isEqualTo(DemoWorkflowStatus.DONE)
-        assertThat(steps[3].status).isEqualTo(DemoWorkflowStatus.DONE)
     }
 
     @Test
@@ -133,7 +167,8 @@ class PaperDemoConsoleStateTest {
     private fun demoSnapshot(
         loss: Double,
         rewardAccuracy: Double,
-        rewardMargin: Double
+        rewardMargin: Double,
+        rssMb: Double? = null
     ): RunSnapshot {
         return RunSnapshot(
             runId = "demo",
@@ -146,6 +181,7 @@ class PaperDemoConsoleStateTest {
                     loss = loss,
                     rewardAccuracy = rewardAccuracy,
                     rewardMargin = rewardMargin,
+                    rssMb = rssMb,
                     source = "android_native_kto"
                 )
             ),

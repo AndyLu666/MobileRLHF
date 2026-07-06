@@ -288,7 +288,6 @@ fun DashboardScreen(
                             onChooseCandidate = viewModel::chooseNativeInferenceCandidate,
                             onChooseRating = viewModel::chooseNativeInferenceRating,
                             onConfigChange = viewModel::updateNativeDemoConfig,
-                            onPreset = viewModel::applyNativeDemoPreset,
                             onStart = viewModel::startNativeDemoRun,
                             onStop = viewModel::stopNativeDemoRun
                         )
@@ -1637,7 +1636,6 @@ private fun ExperimentsTab(
     onChooseCandidate: (String) -> Unit,
     onChooseRating: (Boolean) -> Unit,
     onConfigChange: (NativeDemoConfig) -> Unit,
-    onPreset: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -1660,7 +1658,6 @@ private fun ExperimentsTab(
         onChooseCandidate = onChooseCandidate,
         onChooseRating = onChooseRating,
         onConfigChange = onConfigChange,
-        onPreset = onPreset,
         onStart = onStart,
         onStop = onStop
     )
@@ -1687,11 +1684,12 @@ private fun PaperDemoConsole(
     onChooseCandidate: (String) -> Unit,
     onChooseRating: (Boolean) -> Unit,
     onConfigChange: (NativeDemoConfig) -> Unit,
-    onPreset: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
     val workflowSteps = buildDemoWorkflowSteps(inference, runner, snapshot)
+    val summary = buildPaperDemoSummaryState(config, runner, snapshot)
+    val input = buildDemoInputState(inference, runner)
     val evidence = buildDemoEvidenceState(config, runner, snapshot)
     val selectedRun = runs.firstOrNull { it.id == selectedRunId }?.name ?: "No run selected"
     val compareRun = runs.firstOrNull { it.id == compareRunId }?.name ?: "None"
@@ -1703,6 +1701,7 @@ private fun PaperDemoConsole(
     ) {
         item {
             PaperConsoleHeader(
+                summary = summary,
                 selectedRun = selectedRun,
                 compareRun = compareRun,
                 runner = runner,
@@ -1726,6 +1725,7 @@ private fun PaperDemoConsole(
             PaperGeneratePreferPanel(
                 state = inference,
                 runner = runner,
+                input = input,
                 onStateChange = onInferenceChange,
                 onGenerateSingle = onGenerateSingle,
                 onGeneratePair = onGeneratePair,
@@ -1739,7 +1739,6 @@ private fun PaperDemoConsole(
                 runner = runner,
                 snapshot = snapshot,
                 onConfigChange = onConfigChange,
-                onPreset = onPreset,
                 onStart = onStart,
                 onStop = onStop
             )
@@ -1756,6 +1755,7 @@ private fun PaperDemoConsole(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PaperConsoleHeader(
+    summary: PaperDemoSummaryState,
     selectedRun: String,
     compareRun: String,
     runner: NativeDemoRunnerState,
@@ -1782,9 +1782,9 @@ private fun PaperConsoleHeader(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Paper Demo Console", style = MaterialTheme.typography.titleLarge)
+                    Text(summary.title, style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Generate -> Prefer -> Train KTO -> Evidence",
+                        summary.subtitle,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1796,6 +1796,36 @@ private fun PaperConsoleHeader(
                     modifier = Modifier
                         .background(nativeRunnerColor(runner.status).copy(alpha = 0.10f), RoundedCornerShape(6.dp))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                maxItemsInEachRow = 4
+            ) {
+                MiniMetricChip(
+                    label = "Data",
+                    value = summary.dataStatus,
+                    accent = NeonGreen,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Training",
+                    value = summary.trainingStatus,
+                    accent = NeonBlue,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Peak RSS",
+                    value = summary.peakMemory,
+                    accent = RssColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "LoRA",
+                    value = summary.adapterStatus,
+                    accent = LrColor,
+                    modifier = Modifier.weight(1f)
                 )
             }
             FlowRow(
@@ -1824,7 +1854,7 @@ private fun PaperConsoleHeader(
                     enabled = !running,
                     modifier = Modifier.weight(1f).heightIn(min = 44.dp)
                 ) {
-                    Text("DPO Test", maxLines = 1)
+                    Text("DPO Data", maxLines = 1)
                 }
             }
             FlowRow(
@@ -1910,6 +1940,7 @@ private fun WorkflowStepPill(
 private fun PaperGeneratePreferPanel(
     state: NativeInferenceState,
     runner: NativeDemoRunnerState,
+    input: DemoInputState,
     onStateChange: (NativeInferenceState) -> Unit,
     onGenerateSingle: () -> Unit,
     onGeneratePair: () -> Unit,
@@ -1931,27 +1962,43 @@ private fun PaperGeneratePreferPanel(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             SectionHeader(
-                title = "1. Feedback Lab",
-                subtitle = mode.helpText
+                title = input.title,
+                subtitle = input.subtitle
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                maxItemsInEachRow = 2
+                maxItemsInEachRow = 3
             ) {
                 MiniMetricChip(
-                    label = "Model",
-                    value = if (state.useFedCampusBridge) "FedCampus bridge" else "Qwen3-0.6B",
+                    label = "Input",
+                    value = input.formatLabel,
                     accent = NeonBlue,
                     modifier = Modifier.weight(1f)
                 )
                 MiniMetricChip(
                     label = "KTO Rows",
-                    value = feedbackRows.toString(),
+                    value = input.rowLabel,
                     accent = if (feedbackRows > 0) NeonGreen else NeonAmber,
                     modifier = Modifier.weight(1f)
                 )
+                MiniMetricChip(
+                    label = "Status",
+                    value = input.statusLabel,
+                    accent = if (feedbackRows > 0) NeonGreen else NeonAmber,
+                    modifier = Modifier.weight(1f)
+                )
+                MiniMetricChip(
+                    label = "Model",
+                    value = if (state.useFedCampusBridge) "FedCampus bridge" else "Qwen3-0.6B",
+                    accent = RssColor,
+                    modifier = Modifier.weight(1f)
+                )
             }
+            InlineStatus(
+                message = "Accepted formats: DPO chosen/rejected, KTO binary response/label, or app thumbs.",
+                accent = NeonBlue
+            )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2203,7 +2250,6 @@ private fun PaperKtoTrainingPanel(
     runner: NativeDemoRunnerState,
     snapshot: RunSnapshot?,
     onConfigChange: (NativeDemoConfig) -> Unit,
-    onPreset: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -2222,7 +2268,7 @@ private fun PaperKtoTrainingPanel(
         ) {
             SectionHeader(
                 title = "2. Train KTO on Android",
-                subtitle = runner.message ?: "Use saved A/B or single-rating feedback to update the local LoRA adapter."
+                subtitle = runner.message ?: "Train Qwen3-0.6B LoRA from DPO/KTO feedback on the Android device."
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2235,21 +2281,6 @@ private fun PaperKtoTrainingPanel(
                 MiniMetricChip(label = "Steps", value = "${config.steps}", accent = LrColor, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Batch", value = "2", accent = NeonAmber, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Seq Len", value = "${config.seqLen}", accent = RssColor, modifier = Modifier.weight(1f))
-            }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                maxItemsInEachRow = 3
-            ) {
-                listOf("Smoke", "Phone 80", "Long 220").forEach { preset ->
-                    OutlinedButton(
-                        onClick = { onPreset(preset) },
-                        enabled = !running,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(preset, maxLines = 1)
-                    }
-                }
             }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2288,8 +2319,10 @@ private fun PaperKtoTrainingPanel(
                 Button(
                     onClick = onStart,
                     enabled = !running,
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                    modifier = Modifier.weight(1f).heightIn(min = 54.dp)
                 ) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text("Train KTO")
                 }
                 OutlinedButton(
@@ -2309,7 +2342,6 @@ private fun PaperKtoTrainingPanel(
 private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
     val progress = buildDemoLiveProgressState(snapshot)
     val metrics = snapshot?.metrics.orEmpty()
-    val rewardAccuracySeries = metrics.mapNotNull { it.rewardAccuracy }
     val rewardMarginSeries = metrics.mapNotNull { it.rewardMargin }
     val lossSeries = metrics.mapNotNull { it.loss }
     val rssSeries = metrics.mapNotNull { it.rssMb }
@@ -2327,7 +2359,7 @@ private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
         ) {
             SectionHeader(
                 title = "3. Live Evidence",
-                subtitle = progress.message
+                subtitle = "Loss, reward margin, and RSS memory from Android native KTO."
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2335,7 +2367,6 @@ private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
                 maxItemsInEachRow = 3
             ) {
                 MiniMetricChip(label = "Step", value = progress.stepLabel, accent = LrColor, modifier = Modifier.weight(1f))
-                MiniMetricChip(label = "Reward Accuracy", value = progress.rewardAccuracy, accent = NeonGreen, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Reward Margin", value = progress.rewardMargin, accent = NeonBlue, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Loss", value = progress.loss, accent = LossColor, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Peak Memory", value = progress.peakMemory, accent = RssColor, modifier = Modifier.weight(1f))
@@ -2346,19 +2377,10 @@ private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     maxItemsInEachRow = 2
                 ) {
-                    if (rewardAccuracySeries.isNotEmpty()) {
-                        InteractiveMetricLineChart(
-                            title = "Reward Accuracy",
-                            subtitle = "Higher is better",
-                            values = rewardAccuracySeries,
-                            color = NeonGreen,
-                            modifier = Modifier.weight(1f).heightIn(min = 190.dp)
-                        )
-                    }
                     if (rewardMarginSeries.isNotEmpty()) {
                         InteractiveMetricLineChart(
                             title = "Reward Margin",
-                            subtitle = "Chosen minus rejected reward",
+                            subtitle = "Higher means feedback alignment is improving",
                             values = rewardMarginSeries,
                             color = NeonBlue,
                             modifier = Modifier.weight(1f).heightIn(min = 190.dp)
