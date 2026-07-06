@@ -12,6 +12,7 @@ import com.mobilefinetuner.sdk.MobileFineTuner
 import com.mobilefinetuner.visualizer.data.FeedbackJsonl
 import com.mobilefinetuner.visualizer.data.FedCampusBridgeClient
 import com.mobilefinetuner.visualizer.data.NativeDemoCommandBuilder
+import com.mobilefinetuner.visualizer.data.NativeKtoMetrics
 import com.mobilefinetuner.visualizer.data.TrainingLogParser
 import com.mobilefinetuner.visualizer.model.DashboardTab
 import com.mobilefinetuner.visualizer.model.DashboardUiState
@@ -1335,6 +1336,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
                 var first: MobileFineTuner.KtoStepResult? = null
                 var last: MobileFineTuner.KtoStepResult? = null
+                var peakTrainRssMb: Double? = null
                 for (step in 1..config.steps) {
                     val batchIndices = (0 until batchSize).map { (step - 1 + it) % rows.size }
                     val batch = batchIndices.map { rows[it] }
@@ -1352,36 +1354,36 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                         true
                     )
                     val elapsedMs = SystemClock.elapsedRealtime() - stepStartMs
+                    val rssMb = sampleSelfRssMb()
+                    peakTrainRssMb = NativeKtoMetrics.updatePeakRssMb(peakTrainRssMb, rssMb)
                     if (first == null) {
                         first = result
                     }
                     last = result
-                    val row = JSONObject()
-                        .put("step", step)
-                        .put("source", "android_native_kto")
-                        .put("batch_size", batchSize)
-                        .put("train_samples", rows.size * 2)
-                        .put("feedback_pairs", rows.size)
-                        .put("policy_trainable_params", result.trainableTensorCount)
-                        .put("policy_nonzero_grad_params", result.trainableTensorCount)
-                        .put("policy_frozen_params_with_grad", 0)
-                        .put("reference_grad_params", 0)
-                        .put("loss", result.loss)
-                        .put("reward_accuracy", result.rewardAccuracy)
-                        .put("reward_margin", result.rewardMargin)
-                        .put("desirable_reward", result.desirableReward)
-                        .put("undesirable_reward", result.undesirableReward)
-                        .put("kl_center", 0.0)
-                        .put("sample_count", result.sampleCount)
-                        .put("pair_count", result.pairCount)
-                        .put("valid_response_tokens", result.validResponseTokenCount)
-                        .put("elapsed_ms", elapsedMs)
-                        .put("reference_logps", "base_model_cached")
+                    val row = NativeKtoMetrics.stepJson(
+                        step = step,
+                        batchSize = batchSize,
+                        trainSamples = rows.size * 2,
+                        feedbackPairs = rows.size,
+                        trainableParams = result.trainableTensorCount,
+                        loss = result.loss,
+                        rewardAccuracy = result.rewardAccuracy,
+                        rewardMargin = result.rewardMargin,
+                        desirableReward = result.desirableReward,
+                        undesirableReward = result.undesirableReward,
+                        sampleCount = result.sampleCount,
+                        pairCount = result.pairCount,
+                        validResponseTokens = result.validResponseTokenCount,
+                        elapsedMs = elapsedMs,
+                        rssMb = rssMb
+                    )
                     metricsFile.appendText(row.toString() + "\n")
                     logFile.appendText(
                         "[step $step/${config.steps}] loss=${result.loss} " +
                             "reward_acc=${result.rewardAccuracy} reward_margin=${result.rewardMargin} " +
-                            "samples=${result.sampleCount} time_ms=$elapsedMs\n"
+                            "samples=${result.sampleCount} time_ms=$elapsedMs" +
+                            (rssMb?.let { " rss_mb=${formatDemoValue("%.1f", it)}" } ?: "") +
+                            "\n"
                     )
                 }
 
@@ -1460,6 +1462,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     .put("eval_pairs", evalPairCount)
                     .put("eval_accuracy_before", beforeEvalSummary.accuracy)
                     .put("eval_margin_before", beforeEvalSummary.meanMargin)
+                    .put("max_train_rss_mb", peakTrainRssMb ?: JSONObject.NULL)
                     .put("trend_accuracy_before", firstResult.rewardAccuracy)
                     .put("trend_accuracy_after", finalResult.rewardAccuracy)
                     .put("trend_accuracy_delta", trendAccuracyDelta)
@@ -2141,6 +2144,19 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun formatDemoValue(pattern: String, value: Double?): String {
         return value?.let { String.format(Locale.US, pattern, it) } ?: "N/A"
+    }
+
+    private fun sampleSelfRssMb(): Double? {
+        return runCatching {
+            File("/proc/self/status").useLines { lines ->
+                lines.firstOrNull { it.startsWith("VmRSS:") }
+                    ?.let { line ->
+                        val kb = line.split(Regex("\\s+"))
+                            .firstNotNullOfOrNull { token -> token.toLongOrNull() }
+                        kb?.toDouble()?.div(1024.0)
+                    }
+            }
+        }.getOrNull()
     }
 
     private fun scanLocalModelAssets(): List<LocalModelAsset> {

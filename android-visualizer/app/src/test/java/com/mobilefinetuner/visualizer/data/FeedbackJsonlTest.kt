@@ -126,8 +126,10 @@ class FeedbackJsonlTest {
     fun hasTypedSingleDetectsSingleRecordsOnly() {
         val single = "{\"type\":\"single\",\"prompt\":\"P\",\"response\":\"R\",\"label\":true}"
         val pair = "{\"type\":\"pair\",\"prompt\":\"P\",\"chosen\":\"A\",\"rejected\":\"B\"}"
+        val ktoBinary = "{\"prompt\": \"P\", \"response\": \"R\", \"label\": true, \"feedback_format\": \"kto_binary\"}"
 
         assertThat(FeedbackJsonl.hasTypedSingle(single)).isTrue()
+        assertThat(FeedbackJsonl.hasTypedSingle(ktoBinary)).isTrue()
         assertThat(FeedbackJsonl.hasTypedSingle(pair)).isFalse()
     }
 
@@ -165,5 +167,23 @@ class FeedbackJsonlTest {
         assertThat(pairs[0].rejected).isEqualTo("Give unsafe or irrelevant health advice.")
         assertThat(pairs[1].chosen).isEqualTo("Use a safe, evidence-based health suggestion.")
         assertThat(pairs[1].rejected).isEqualTo("Do hard intervals after poor sleep.")
+    }
+
+    @Test
+    fun toTrainingPairsConvertsKtoBinaryRowsForNativeSdk() {
+        val desirable = "{\"prompt\": \"Recovery?\", \"response\": \"Take an easy walk.\", \"label\": true, \"feedback_format\": \"kto_binary\"}"
+        val undesirable = "{\"prompt\": \"Recovery?\", \"response\": \"Do maximum intervals after poor sleep.\", \"label\": false, \"feedback_format\": \"kto_binary\"}"
+
+        val pairs = FeedbackJsonl.toTrainingPairs(
+            lines = listOf(desirable, undesirable),
+            desirableBaseline = "Use a safe, evidence-based health suggestion.",
+            undesirableBaseline = "Give unsafe or irrelevant health advice."
+        )
+
+        assertThat(pairs).hasSize(2)
+        assertThat(pairs[0].chosen).isEqualTo("Take an easy walk.")
+        assertThat(pairs[0].rejected).isEqualTo("Give unsafe or irrelevant health advice.")
+        assertThat(pairs[1].chosen).isEqualTo("Use a safe, evidence-based health suggestion.")
+        assertThat(pairs[1].rejected).isEqualTo("Do maximum intervals after poor sleep.")
     }
 }

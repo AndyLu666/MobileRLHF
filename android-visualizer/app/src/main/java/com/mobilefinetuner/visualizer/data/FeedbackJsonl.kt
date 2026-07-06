@@ -91,7 +91,10 @@ object FeedbackJsonl {
     }
 
     fun hasTypedSingle(line: String): Boolean {
-        return hasJsonStringValue(line, "type", "single") &&
+        return (
+            hasJsonStringValue(line, "type", "single") ||
+                hasJsonStringValue(line, "feedback_format", "kto_binary")
+            ) &&
             hasJsonField(line, "response") &&
             hasJsonField(line, "label")
     }
@@ -126,22 +129,20 @@ object FeedbackJsonl {
     }
 
     private fun hasJsonField(line: String, key: String): Boolean {
-        return line.contains("\"$key\":")
+        return Regex("\"${Regex.escape(key)}\"\\s*:").containsMatchIn(line)
     }
 
     private fun hasJsonStringValue(line: String, key: String, value: String): Boolean {
-        return line.contains("\"$key\":\"$value\"")
+        return extractJsonString(line, key) == value
     }
 
     private fun hasJsonBooleanValue(line: String, key: String, value: Boolean): Boolean {
-        return line.contains("\"$key\":$value")
+        return Regex("\"${Regex.escape(key)}\"\\s*:\\s*$value\\b").containsMatchIn(line)
     }
 
     private fun extractJsonString(line: String, key: String): String? {
-        val prefix = "\"$key\":\""
-        val start = line.indexOf(prefix)
-        if (start < 0) return null
-        val valueStart = start + prefix.length
+        val match = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"").find(line) ?: return null
+        val valueStart = match.range.last + 1
         val out = StringBuilder()
         var escaped = false
         for (i in valueStart until line.length) {
