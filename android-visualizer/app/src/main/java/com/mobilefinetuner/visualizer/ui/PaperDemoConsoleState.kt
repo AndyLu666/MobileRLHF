@@ -72,6 +72,14 @@ data class DemoPrimaryActionState(
     val enabled: Boolean
 )
 
+data class DemoChartPreviewState(
+    val title: String,
+    val subtitle: String,
+    val isLive: Boolean,
+    val lossValues: List<Double>,
+    val rewardMarginValues: List<Double>
+)
+
 data class FeedbackModeUiState(
     val selectedLabel: String,
     val actionLabel: String,
@@ -192,6 +200,30 @@ fun buildDemoPrimaryActionState(runner: NativeDemoRunnerState): DemoPrimaryActio
                 enabled = true
             )
         }
+    }
+}
+
+fun buildDemoChartPreviewState(snapshot: RunSnapshot?): DemoChartPreviewState {
+    val metrics = snapshot?.metrics.orEmpty()
+    val liveLoss = metrics.mapNotNull { it.loss }
+    val liveMargin = metrics.mapNotNull { it.rewardMargin }
+    val hasLiveCurves = liveLoss.size >= 2 || liveMargin.size >= 2
+    return if (hasLiveCurves) {
+        DemoChartPreviewState(
+            title = "Live Training Charts",
+            subtitle = "Real Android KTO metrics",
+            isLive = true,
+            lossValues = liveLoss.ifEmpty { listOf(0.0, 0.0) },
+            rewardMarginValues = liveMargin.ifEmpty { listOf(0.0, 0.0) }
+        )
+    } else {
+        DemoChartPreviewState(
+            title = "Training Preview",
+            subtitle = "Example curves; real values appear after training starts",
+            isLive = false,
+            lossValues = listOf(0.68, 0.61, 0.55, 0.49, 0.43),
+            rewardMarginValues = listOf(0.00, 0.11, 0.24, 0.42, 0.62)
+        )
     }
 }
 

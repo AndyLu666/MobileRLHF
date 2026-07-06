@@ -1693,6 +1693,7 @@ private fun PaperDemoConsole(
     val input = buildDemoInputState(inference, runner)
     val evidence = buildDemoEvidenceState(config, runner, snapshot)
     val primaryAction = buildDemoPrimaryActionState(runner)
+    val chartPreview = buildDemoChartPreviewState(snapshot)
     val runLabels = buildPaperRunLabelState(
         selectedRunName = runs.firstOrNull { it.id == selectedRunId }?.name,
         compareRunName = runs.firstOrNull { it.id == compareRunId }?.name,
@@ -1708,6 +1709,7 @@ private fun PaperDemoConsole(
             PaperConsoleHeader(
                 summary = summary,
                 primaryAction = primaryAction,
+                chartPreview = chartPreview,
                 selectedRun = runLabels.selectedRun,
                 compareRun = runLabels.compareRun,
                 runner = runner,
@@ -1765,6 +1767,7 @@ private fun PaperDemoConsole(
 private fun PaperConsoleHeader(
     summary: PaperDemoSummaryState,
     primaryAction: DemoPrimaryActionState,
+    chartPreview: DemoChartPreviewState,
     selectedRun: String,
     compareRun: String,
     runner: NativeDemoRunnerState,
@@ -1839,6 +1842,7 @@ private fun PaperConsoleHeader(
                 }
                 Text(primaryAction.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            PaperChartPreview(chartPreview)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1916,6 +1920,54 @@ private fun PaperConsoleHeader(
                     modifier = Modifier.weight(1f)
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperChartPreview(preview: DemoChartPreviewState) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(preview.title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = preview.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                text = if (preview.isLive) "LIVE" else "PREVIEW",
+                style = MaterialTheme.typography.labelMedium,
+                color = if (preview.isLive) NeonGreen else NeonAmber,
+                modifier = Modifier
+                    .background(
+                        (if (preview.isLive) NeonGreen else NeonAmber).copy(alpha = 0.12f),
+                        RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            InteractiveMetricLineChart(
+                title = "Loss",
+                subtitle = "Lower is better",
+                values = preview.lossValues,
+                color = LossColor,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp)
+            )
+            InteractiveMetricLineChart(
+                title = "Reward Margin",
+                subtitle = "Higher is better",
+                values = preview.rewardMarginValues,
+                color = NeonBlue,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 170.dp)
+            )
         }
     }
 }
@@ -2382,9 +2434,10 @@ private fun PaperKtoTrainingPanel(
 @Composable
 private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
     val progress = buildDemoLiveProgressState(snapshot)
+    val preview = buildDemoChartPreviewState(snapshot)
     val metrics = snapshot?.metrics.orEmpty()
-    val rewardMarginSeries = metrics.mapNotNull { it.rewardMargin }
-    val lossSeries = metrics.mapNotNull { it.loss }
+    val rewardMarginSeries = metrics.mapNotNull { it.rewardMargin }.ifEmpty { preview.rewardMarginValues }
+    val lossSeries = metrics.mapNotNull { it.loss }.ifEmpty { preview.lossValues }
     val rssSeries = metrics.mapNotNull { it.rssMb }
 
     Surface(
@@ -2412,40 +2465,30 @@ private fun PaperLiveProgressPanel(snapshot: RunSnapshot?) {
                 MiniMetricChip(label = "Loss", value = progress.loss, accent = LossColor, modifier = Modifier.weight(1f))
                 MiniMetricChip(label = "Peak Memory", value = progress.peakMemory, accent = RssColor, modifier = Modifier.weight(1f))
             }
-            if (metrics.size >= 2) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                    maxItemsInEachRow = 2
-                ) {
-                    if (rewardMarginSeries.isNotEmpty()) {
-                        InteractiveMetricLineChart(
-                            title = "Reward Margin",
-                            subtitle = "Higher means feedback alignment is improving",
-                            values = rewardMarginSeries,
-                            color = NeonBlue,
-                            modifier = Modifier.weight(1f).heightIn(min = 190.dp)
-                        )
-                    }
-                    if (lossSeries.isNotEmpty()) {
-                        InteractiveMetricLineChart(
-                            title = "Loss",
-                            subtitle = "Secondary training signal",
-                            values = lossSeries,
-                            color = LossColor,
-                            modifier = Modifier.weight(1f).heightIn(min = 190.dp)
-                        )
-                    }
-                    if (rssSeries.isNotEmpty()) {
-                        InteractiveMetricLineChart(
-                            title = "Memory",
-                            subtitle = "RSS MB",
-                            values = rssSeries,
-                            color = RssColor,
-                            modifier = Modifier.weight(1f).heightIn(min = 190.dp),
-                            valueFormatter = { "${format1(it)} MB" }
-                        )
-                    }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                InteractiveMetricLineChart(
+                    title = if (preview.isLive) "Reward Margin" else "Reward Margin Preview",
+                    subtitle = if (preview.isLive) "Higher means feedback alignment is improving" else "Example trend before training starts",
+                    values = rewardMarginSeries,
+                    color = NeonBlue,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 190.dp)
+                )
+                InteractiveMetricLineChart(
+                    title = if (preview.isLive) "Loss" else "Loss Preview",
+                    subtitle = if (preview.isLive) "Training loss over steps" else "Example trend before training starts",
+                    values = lossSeries,
+                    color = LossColor,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 190.dp)
+                )
+                if (rssSeries.isNotEmpty()) {
+                    InteractiveMetricLineChart(
+                        title = "Memory",
+                        subtitle = "RSS MB",
+                        values = rssSeries,
+                        color = RssColor,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 190.dp),
+                        valueFormatter = { "${format1(it)} MB" }
+                    )
                 }
             }
         }

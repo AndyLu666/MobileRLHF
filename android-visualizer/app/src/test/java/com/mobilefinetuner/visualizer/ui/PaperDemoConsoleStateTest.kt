@@ -170,6 +170,43 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun chartPreviewProvidesSampleCurvesBeforeTraining() {
+        val preview = buildDemoChartPreviewState(snapshot = null)
+
+        assertThat(preview.title).isEqualTo("Training Preview")
+        assertThat(preview.isLive).isFalse()
+        assertThat(preview.lossValues).hasSize(5)
+        assertThat(preview.rewardMarginValues).hasSize(5)
+        assertThat(preview.lossValues.first()).isGreaterThan(preview.lossValues.last())
+        assertThat(preview.rewardMarginValues.last()).isGreaterThan(preview.rewardMarginValues.first())
+    }
+
+    @Test
+    fun chartPreviewUsesLiveMetricsWhenAvailable() {
+        val preview = buildDemoChartPreviewState(
+            snapshot = RunSnapshot(
+                runId = "demo",
+                runName = "phone_qwen_kto",
+                status = RunStatus.RUNNING,
+                metrics = listOf(
+                    StepMetric(step = 1, loss = 0.62, rewardMargin = 0.1, source = "android_native_kto"),
+                    StepMetric(step = 2, loss = 0.51, rewardMargin = 0.3, source = "android_native_kto")
+                ),
+                rssPoints = emptyList(),
+                events = emptyList(),
+                logTail = emptyList(),
+                summary = RunSummary(totalSteps = 10),
+                updatedAtMs = 1L
+            )
+        )
+
+        assertThat(preview.title).isEqualTo("Live Training Charts")
+        assertThat(preview.isLive).isTrue()
+        assertThat(preview.lossValues).containsExactly(0.62, 0.51).inOrder()
+        assertThat(preview.rewardMarginValues).containsExactly(0.1, 0.3).inOrder()
+    }
+
+    @Test
     fun liveProgressFormatsCurrentStepFromSnapshot() {
         val progress = buildDemoLiveProgressState(
             snapshot = demoSnapshot(
