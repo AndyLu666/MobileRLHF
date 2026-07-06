@@ -54,6 +54,11 @@ data class DemoInputState(
     val statusLabel: String
 )
 
+data class PaperRunLabelState(
+    val selectedRun: String,
+    val compareRun: String
+)
+
 data class FeedbackModeUiState(
     val selectedLabel: String,
     val actionLabel: String,
@@ -133,6 +138,18 @@ fun buildDemoInputState(
         formatLabel = format,
         rowLabel = if (rows > 0) "$rows KTO rows" else "No rows",
         statusLabel = if (rows > 0) "Ready" else "Needs data"
+    )
+}
+
+fun buildPaperRunLabelState(
+    selectedRunName: String?,
+    compareRunName: String?,
+    runner: NativeDemoRunnerState
+): PaperRunLabelState {
+    val hasDemoData = runner.trainingPairCount > 0
+    return PaperRunLabelState(
+        selectedRun = selectedRunName ?: if (hasDemoData) "Demo data loaded" else "No run selected",
+        compareRun = compareRunName ?: if (hasDemoData) "Optional" else "None"
     )
 }
 

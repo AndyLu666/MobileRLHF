@@ -130,6 +130,18 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun runLabelsDoNotClaimNoRunWhenDemoDataIsLoaded() {
+        val labels = buildPaperRunLabelState(
+            selectedRunName = null,
+            compareRunName = null,
+            runner = NativeDemoRunnerState(trainingPairCount = 24)
+        )
+
+        assertThat(labels.selectedRun).isEqualTo("Demo data loaded")
+        assertThat(labels.compareRun).isEqualTo("Optional")
+    }
+
+    @Test
     fun liveProgressFormatsCurrentStepFromSnapshot() {
         val progress = buildDemoLiveProgressState(
             snapshot = demoSnapshot(

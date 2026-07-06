@@ -1692,8 +1692,11 @@ private fun PaperDemoConsole(
     val summary = buildPaperDemoSummaryState(config, runner, snapshot)
     val input = buildDemoInputState(inference, runner)
     val evidence = buildDemoEvidenceState(config, runner, snapshot)
-    val selectedRun = runs.firstOrNull { it.id == selectedRunId }?.name ?: "No run selected"
-    val compareRun = runs.firstOrNull { it.id == compareRunId }?.name ?: "None"
+    val runLabels = buildPaperRunLabelState(
+        selectedRunName = runs.firstOrNull { it.id == selectedRunId }?.name,
+        compareRunName = runs.firstOrNull { it.id == compareRunId }?.name,
+        runner = runner
+    )
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1703,8 +1706,8 @@ private fun PaperDemoConsole(
         item {
             PaperConsoleHeader(
                 summary = summary,
-                selectedRun = selectedRun,
-                compareRun = compareRun,
+                selectedRun = runLabels.selectedRun,
+                compareRun = runLabels.compareRun,
                 runner = runner,
                 onPickDirectory = onPickDirectory,
                 onEnableDemo = onEnableDemo,
