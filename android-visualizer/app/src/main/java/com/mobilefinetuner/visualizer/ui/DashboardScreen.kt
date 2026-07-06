@@ -1692,6 +1692,7 @@ private fun PaperDemoConsole(
     val summary = buildPaperDemoSummaryState(config, runner, snapshot)
     val input = buildDemoInputState(inference, runner)
     val evidence = buildDemoEvidenceState(config, runner, snapshot)
+    val primaryAction = buildDemoPrimaryActionState(runner)
     val runLabels = buildPaperRunLabelState(
         selectedRunName = runs.firstOrNull { it.id == selectedRunId }?.name,
         compareRunName = runs.firstOrNull { it.id == compareRunId }?.name,
@@ -1706,12 +1707,15 @@ private fun PaperDemoConsole(
         item {
             PaperConsoleHeader(
                 summary = summary,
+                primaryAction = primaryAction,
                 selectedRun = runLabels.selectedRun,
                 compareRun = runLabels.compareRun,
                 runner = runner,
                 onPickDirectory = onPickDirectory,
                 onEnableDemo = onEnableDemo,
-                onEnableDpoTest = onEnableDpoTest
+                onEnableDpoTest = onEnableDpoTest,
+                onStart = onStart,
+                onStop = onStop
             )
         }
         item {
@@ -1760,12 +1764,15 @@ private fun PaperDemoConsole(
 @Composable
 private fun PaperConsoleHeader(
     summary: PaperDemoSummaryState,
+    primaryAction: DemoPrimaryActionState,
     selectedRun: String,
     compareRun: String,
     runner: NativeDemoRunnerState,
     onPickDirectory: () -> Unit,
     onEnableDemo: () -> Unit,
-    onEnableDpoTest: () -> Unit
+    onEnableDpoTest: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
 ) {
     val running = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
     Surface(
@@ -1811,6 +1818,27 @@ private fun PaperConsoleHeader(
                     else -> RssColor
                 }
             )
+            Button(
+                onClick = {
+                    when (primaryAction.kind) {
+                        DemoPrimaryActionKind.START -> onStart()
+                        DemoPrimaryActionKind.STOP -> onStop()
+                        DemoPrimaryActionKind.LOAD_DATA -> onEnableDpoTest()
+                        DemoPrimaryActionKind.REVIEW -> Unit
+                    }
+                },
+                enabled = primaryAction.enabled &&
+                    (primaryAction.kind == DemoPrimaryActionKind.STOP || !running),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp)
+            ) {
+                if (primaryAction.kind == DemoPrimaryActionKind.START) {
+                    Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(primaryAction.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),

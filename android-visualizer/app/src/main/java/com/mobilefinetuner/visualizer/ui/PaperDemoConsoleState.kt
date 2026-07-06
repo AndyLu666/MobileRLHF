@@ -59,6 +59,19 @@ data class PaperRunLabelState(
     val compareRun: String
 )
 
+enum class DemoPrimaryActionKind {
+    START,
+    STOP,
+    REVIEW,
+    LOAD_DATA
+}
+
+data class DemoPrimaryActionState(
+    val label: String,
+    val kind: DemoPrimaryActionKind,
+    val enabled: Boolean
+)
+
 data class FeedbackModeUiState(
     val selectedLabel: String,
     val actionLabel: String,
@@ -151,6 +164,35 @@ fun buildPaperRunLabelState(
         selectedRun = selectedRunName ?: if (hasDemoData) "Demo data loaded" else "No run selected",
         compareRun = compareRunName ?: if (hasDemoData) "Optional" else "None"
     )
+}
+
+fun buildDemoPrimaryActionState(runner: NativeDemoRunnerState): DemoPrimaryActionState {
+    return when (runner.status) {
+        NativeDemoRunStatus.RUNNING,
+        NativeDemoRunStatus.STOPPING -> DemoPrimaryActionState(
+            label = "Stop Training",
+            kind = DemoPrimaryActionKind.STOP,
+            enabled = runner.status == NativeDemoRunStatus.RUNNING
+        )
+        NativeDemoRunStatus.COMPLETED -> DemoPrimaryActionState(
+            label = "Review Evidence",
+            kind = DemoPrimaryActionKind.REVIEW,
+            enabled = false
+        )
+        else -> if (runner.trainingPairCount > 0) {
+            DemoPrimaryActionState(
+                label = "Start KTO Training",
+                kind = DemoPrimaryActionKind.START,
+                enabled = true
+            )
+        } else {
+            DemoPrimaryActionState(
+                label = "Load DPO/KTO Data",
+                kind = DemoPrimaryActionKind.LOAD_DATA,
+                enabled = true
+            )
+        }
+    }
 }
 
 fun buildDemoWorkflowSteps(

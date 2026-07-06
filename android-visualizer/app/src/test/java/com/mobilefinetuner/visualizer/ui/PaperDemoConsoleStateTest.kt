@@ -142,6 +142,34 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun primaryActionStartsKtoWhenDataIsReady() {
+        val action = buildDemoPrimaryActionState(
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.READY,
+                trainingPairCount = 24
+            )
+        )
+
+        assertThat(action.label).isEqualTo("Start KTO Training")
+        assertThat(action.kind).isEqualTo(DemoPrimaryActionKind.START)
+        assertThat(action.enabled).isTrue()
+    }
+
+    @Test
+    fun primaryActionStopsActiveTraining() {
+        val action = buildDemoPrimaryActionState(
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.RUNNING,
+                trainingPairCount = 24
+            )
+        )
+
+        assertThat(action.label).isEqualTo("Stop Training")
+        assertThat(action.kind).isEqualTo(DemoPrimaryActionKind.STOP)
+        assertThat(action.enabled).isTrue()
+    }
+
+    @Test
     fun liveProgressFormatsCurrentStepFromSnapshot() {
         val progress = buildDemoLiveProgressState(
             snapshot = demoSnapshot(
