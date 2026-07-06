@@ -71,8 +71,20 @@ class PaperDemoConsoleStateTest {
 
         assertThat(input.title).isEqualTo("1. Data")
         assertThat(input.formatLabel).isEqualTo("DPO pairs -> KTO")
+        assertThat(input.formatLabel.length).isAtMost(16)
         assertThat(input.rowLabel).isEqualTo("24 KTO rows")
         assertThat(input.statusLabel).isEqualTo("Ready")
+    }
+
+    @Test
+    fun inputStateUsesShortLabelForPreloadedKtoRows() {
+        val input = buildDemoInputState(
+            inference = NativeInferenceState(),
+            runner = NativeDemoRunnerState(trainingPairCount = 24)
+        )
+
+        assertThat(input.formatLabel).isEqualTo("KTO/DPO rows")
+        assertThat(input.formatLabel.length).isAtMost(14)
     }
 
     @Test
@@ -93,9 +105,28 @@ class PaperDemoConsoleStateTest {
         )
 
         assertThat(summary.title).isEqualTo("Qwen3-0.6B On-device KTO")
-        assertThat(summary.dataStatus).isEqualTo("DPO/KTO data ready")
+        assertThat(summary.dataStatus).isEqualTo("DPO/KTO ready")
+        assertThat(summary.dataStatus.length).isAtMost(14)
         assertThat(summary.trainingStatus).isEqualTo("KTO completed")
+        assertThat(summary.trainingStatus.length).isAtMost(16)
         assertThat(summary.peakMemory).isEqualTo("5289.6 MB")
+        assertThat(summary.readinessLabel).isEqualTo("Demo ready")
+        assertThat(summary.readinessDetail).isEqualTo("DPO/KTO data, Android KTO training, and live evidence are all available.")
+    }
+
+    @Test
+    fun paperSummaryExplainsMissingDataBeforeTraining() {
+        val summary = buildPaperDemoSummaryState(
+            config = NativeDemoConfig(steps = 10),
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.READY,
+                trainingPairCount = 0
+            ),
+            snapshot = null
+        )
+
+        assertThat(summary.readinessLabel).isEqualTo("Need data")
+        assertThat(summary.readinessDetail).isEqualTo("Load DPO pairs, KTO binary rows, or collect thumbs feedback first.")
     }
 
     @Test
@@ -161,6 +192,8 @@ class PaperDemoConsoleStateTest {
         assertThat(evidence.loss).isEqualTo("0.494")
         assertThat(evidence.rewardAccuracy).isEqualTo("0.500")
         assertThat(evidence.rewardMargin).isEqualTo("0.052")
+        assertThat(evidence.artifacts).isEqualTo("report.json, metrics.ndjson, adapter.safetensors")
+        assertThat(evidence.artifacts).doesNotContain("before_after")
         assertThat(formatDemoMetric(null)).isEqualTo("N/A")
     }
 

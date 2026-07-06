@@ -1596,7 +1596,7 @@ private fun MiniMetricChip(
 ) {
     Column(
         modifier = modifier
-            .heightIn(min = 72.dp)
+            .heightIn(min = 78.dp)
             .background(accent.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -1610,7 +1610,7 @@ private fun MiniMetricChip(
             text  = value,
             style = MaterialTheme.typography.titleMedium,
             color = accent,
-            maxLines = 2,
+            maxLines = 3,
             overflow = TextOverflow.Ellipsis
         )
     }
@@ -1798,6 +1798,15 @@ private fun PaperConsoleHeader(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
             }
+            InlineStatus(
+                message = "${summary.readinessLabel}: ${summary.readinessDetail}",
+                accent = when (summary.readinessLabel) {
+                    "Demo ready" -> NeonGreen
+                    "Training" -> NeonBlue
+                    "Ready to train" -> NeonAmber
+                    else -> RssColor
+                }
+            )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -2426,8 +2435,8 @@ private fun PaperEvidencePanel(evidence: DemoEvidenceState) {
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             SectionHeader(
-                title = "4. Evidence for Paper",
-                subtitle = "Smoke runs show Android training mechanics and reward trend, not full quality proof."
+                title = "4. Demo Evidence",
+                subtitle = "Use the latest Android KTO metrics and saved LoRA adapter as the demo proof."
             )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2440,7 +2449,7 @@ private fun PaperEvidencePanel(evidence: DemoEvidenceState) {
                 PaperEvidenceMetric("Steps", evidence.steps, LrColor, Modifier.weight(1f))
                 PaperEvidenceMetric("Batch", evidence.batch, NeonAmber, Modifier.weight(1f))
                 PaperEvidenceMetric("Loss", evidence.loss, LossColor, Modifier.weight(1f))
-                PaperEvidenceMetric("Reward Accuracy", evidence.rewardAccuracy, NeonGreen, Modifier.weight(1f))
+                PaperEvidenceMetric("Reward Acc.", evidence.rewardAccuracy, NeonGreen, Modifier.weight(1f))
                 PaperEvidenceMetric("Reward Margin", evidence.rewardMargin, NeonBlue, Modifier.weight(1f))
                 PaperEvidenceMetric("Training Trend", evidence.trendMargin, RssColor, Modifier.weight(1f))
             }
@@ -3312,9 +3321,9 @@ private fun nativeRunnerColor(status: NativeDemoRunStatus): Color {
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
         DashboardTab.RUNNER -> "Run"
-        DashboardTab.OVERVIEW -> "Progress"
+        DashboardTab.OVERVIEW -> "Prog"
         DashboardTab.TRAINING -> "Charts"
-        DashboardTab.COMPARISON -> "Compare"
+        DashboardTab.COMPARISON -> "Diff"
         DashboardTab.LOGS -> "Logs"
         DashboardTab.EXPERIMENTS -> "Demo"
     }

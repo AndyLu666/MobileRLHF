@@ -38,6 +38,8 @@ data class DemoEvidenceState(
 data class PaperDemoSummaryState(
     val title: String,
     val subtitle: String,
+    val readinessLabel: String,
+    val readinessDetail: String,
     val dataStatus: String,
     val trainingStatus: String,
     val peakMemory: String,
@@ -84,10 +86,26 @@ fun buildPaperDemoSummaryState(
         ?: snapshot?.summary?.maxTrainRssMb
     val completed = runner.status == NativeDemoRunStatus.COMPLETED ||
         snapshot?.status?.name == "COMPLETED"
+    val hasData = rows > 0
+    val hasEvidence = snapshot?.metrics?.isNotEmpty() == true
+    val readinessLabel = when {
+        hasData && completed && hasEvidence -> "Demo ready"
+        hasData && runner.status == NativeDemoRunStatus.RUNNING -> "Training"
+        hasData -> "Ready to train"
+        else -> "Need data"
+    }
+    val readinessDetail = when (readinessLabel) {
+        "Demo ready" -> "DPO/KTO data, Android KTO training, and live evidence are all available."
+        "Training" -> "Android KTO is running; live metrics will update below."
+        "Ready to train" -> "DPO/KTO feedback is loaded; start KTO to produce live evidence."
+        else -> "Load DPO pairs, KTO binary rows, or collect thumbs feedback first."
+    }
     return PaperDemoSummaryState(
         title = "Qwen3-0.6B On-device KTO",
         subtitle = "Data -> Train KTO -> Evidence",
-        dataStatus = if (rows > 0) "DPO/KTO data ready" else "Waiting for data",
+        readinessLabel = readinessLabel,
+        readinessDetail = readinessDetail,
+        dataStatus = if (hasData) "DPO/KTO ready" else "Need data",
         trainingStatus = when {
             runner.status == NativeDemoRunStatus.RUNNING -> "KTO running"
             completed -> "KTO completed"
@@ -106,7 +124,7 @@ fun buildDemoInputState(
     val format = when {
         inference.savedPairs > 0 -> "DPO pairs -> KTO"
         inference.savedFeedbackRows > 0 -> "App thumbs -> KTO"
-        runner.trainingPairCount > 0 -> "KTO binary / DPO ready"
+        runner.trainingPairCount > 0 -> "KTO/DPO rows"
         else -> "DPO or KTO JSONL"
     }
     return DemoInputState(
@@ -223,7 +241,7 @@ fun buildDemoEvidenceState(
         "Pending"
     }
     val artifacts = snapshot?.runName?.let {
-        "report.json, metrics.ndjson, before_after_eval.json"
+        "report.json, metrics.ndjson, adapter.safetensors"
     } ?: "Waiting for report.json"
 
     return DemoEvidenceState(
