@@ -60,6 +60,9 @@ public:
     std::vector<TensorPtr> trainable_parameters();
     std::vector<std::pair<std::string, TensorPtr>> named_trainable_parameters();
 
+    void save_lora_adapter_jsonl(const std::string& path);
+    void load_lora_adapter_jsonl(const std::string& path);
+
     ModelFamily family() const { return spec_.family; }
     const ModelArchitectureSpec& spec() const { return spec_; }
     const std::string& model_dir() const { return model_dir_; }

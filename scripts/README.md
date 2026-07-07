@@ -30,9 +30,11 @@ scripts/
 ├── prepare_arcc_jsonl.py
 ├── prepare_mcq_jsonl.py
 ├── prepare_qa_dpo_jsonl.py
+├── convert_dpo_to_kto_jsonl.py
 ├── judge_qa_answers.py
 ├── prepare_qnli_jsonl.py
 ├── pretokenize_wikitext2_gemma.py
+├── run_kto_health_smoke.sh
 ├── run_training_real_assets.sh
 └── run_training_smoke.sh
 ```
@@ -138,6 +140,52 @@ bash scripts/run_training_smoke.sh
 
 Environment overrides:
 - `SMOKE_STEPS` to control the number of synthetic update steps
+
+### `convert_dpo_to_kto_jsonl.py`
+
+Converts DPO `prompt/chosen/rejected` JSONL into KTO binary-feedback JSONL.
+Each DPO pair becomes two KTO records: the chosen response is written with
+`label=true`, and the rejected response is written with `label=false`.
+
+```bash
+python3 scripts/convert_dpo_to_kto_jsonl.py \
+  --input review-stage/data/health_dpo_curated_train.jsonl \
+  --output review-stage/data/health_kto_train.jsonl \
+  --stats runs/kto_health_smoke/convert_train_stats.json
+```
+
+### `run_kto_health_smoke.sh`
+
+Runs the maintained Qwen3-0.6B KTO health-feedback smoke workflow. It
+regenerates KTO binary train/eval JSONL from curated DPO pairs, then runs both
+target smoke configurations:
+
+- batch size 4, 5 steps;
+- batch size 2, 10 steps.
+
+```bash
+bash scripts/run_kto_health_smoke.sh
+```
+
+The script writes generated metrics and conversion stats under ignored `runs/`
+paths. It proves data conversion, finite KTO loss, policy backprop, and frozen
+reference behavior; it is not a model-quality benchmark.
+
+For direct CLI use, call the maintained Python module:
+
+```bash
+python3 -m pytorch_alignment.kto_cli \
+  --backend qwen \
+  --model_dir examples/qwen_lora_finetune/pretrained \
+  --kto_jsonl review-stage/data/health_kto_train.jsonl \
+  --eval_jsonl review-stage/data/health_kto_eval.jsonl \
+  --out_dir runs/kto_qwen3_0_6b_manual \
+  --max_steps 5 \
+  --batch_size 4 \
+  --seq_len 128 \
+  --lora_rank 2 \
+  --lora_alpha 4
+```
 
 ### `run_training_real_assets.sh`
 

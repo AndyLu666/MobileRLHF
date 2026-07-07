@@ -102,6 +102,20 @@ SafeTensorsLoadOptions load_options_for_family(ModelFamily family,
             break;
         case ModelFamily::Gemma:
         case ModelFamily::Qwen:
+            opts.preserve_low_precision_key_substrings.insert(
+                opts.preserve_low_precision_key_substrings.end(),
+                {
+                    "embed_tokens.weight",
+                    "lm_head.weight",
+                    "q_proj.weight",
+                    "k_proj.weight",
+                    "v_proj.weight",
+                    "o_proj.weight",
+                    "gate_proj.weight",
+                    "up_proj.weight",
+                    "down_proj.weight",
+                });
+            [[fallthrough]];
         case ModelFamily::Llama:
         case ModelFamily::Mistral:
             // HF decoder linear weights are [out, in]; MF kernels expect [in, out].

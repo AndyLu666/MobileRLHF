@@ -255,6 +255,48 @@ void test_qwen_auto_lora_dispatch() {
     require_named_trainables_are_stable(*model, "layers.0.self_attn.q_proj");
 }
 
+void test_qwen_lora_adapter_jsonl_round_trips_trainable_weights() {
+    const fs::path root = make_case_dir("qwen_lora_adapter");
+    write_file(root / "config.json",
+               R"({"model_type":"qwen3","vocab_size":32,"hidden_size":8,"intermediate_size":16,"num_hidden_layers":1,"num_attention_heads":2,"num_key_value_heads":1,"max_position_embeddings":16})");
+
+    auto source = ops::AutoModelForCausalLM::from_pretrained(root.string(), no_weight_load());
+    source->init_lora(ops::AutoLoraConfig::attention_qkvo());
+    auto source_params = source->named_trainable_parameters();
+    require(!source_params.empty(), "Qwen source LoRA parameters missing");
+    for (std::size_t p = 0; p < source_params.size(); ++p) {
+        float* data = source_params[p].second->data<float>();
+        for (int64_t i = 0; i < source_params[p].second->numel(); ++i) {
+            data[i] = 0.25f + static_cast<float>(p) * 0.01f + static_cast<float>(i) * 0.001f;
+        }
+    }
+
+    const fs::path adapter_path = root / "adapter.jsonl";
+    source->save_lora_adapter_jsonl(adapter_path.string());
+
+    auto target = ops::AutoModelForCausalLM::from_pretrained(root.string(), no_weight_load());
+    target->init_lora(ops::AutoLoraConfig::attention_qkvo());
+    for (const auto& kv : target->named_trainable_parameters()) {
+        float* data = kv.second->data<float>();
+        for (int64_t i = 0; i < kv.second->numel(); ++i) {
+            data[i] = -1.0f;
+        }
+    }
+    target->load_lora_adapter_jsonl(adapter_path.string());
+
+    const auto target_params = target->named_trainable_parameters();
+    require(source_params.size() == target_params.size(), "round-trip LoRA parameter count mismatch");
+    for (std::size_t p = 0; p < source_params.size(); ++p) {
+        require(source_params[p].first == target_params[p].first, "round-trip LoRA parameter name mismatch");
+        const float* expected = source_params[p].second->data<float>();
+        const float* actual = target_params[p].second->data<float>();
+        for (int64_t i = 0; i < source_params[p].second->numel(); ++i) {
+            require(std::fabs(expected[i] - actual[i]) < 1e-7f,
+                    "round-trip LoRA parameter value mismatch");
+        }
+    }
+}
+
 void test_llama_auto_trainer_step_with_untied_head() {
     const fs::path root = make_case_dir("llama");
     write_file(root / "config.json",
@@ -386,6 +428,7 @@ int main() {
     test_gpt2_lora_target_policy();
     test_gemma_auto_lora_dispatch();
     test_qwen_auto_lora_dispatch();
+    test_qwen_lora_adapter_jsonl_round_trips_trainable_weights();
     test_llama_auto_trainer_step_with_untied_head();
     test_llama_key_mapper_respects_bias_and_lm_head();
     test_llama_rejects_unsupported_rope_scaling();

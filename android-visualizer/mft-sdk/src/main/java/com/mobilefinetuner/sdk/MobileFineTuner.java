@@ -91,6 +91,23 @@ public final class MobileFineTuner implements AutoCloseable {
         );
     }
 
+    public void createKtoTrainer(KtoTrainerConfig config) {
+        if (config == null) {
+            throw new IllegalArgumentException("config must not be null");
+        }
+        nativeCreateKtoTrainer(
+                requireOpen(),
+                config.learningRate,
+                config.weightDecay,
+                config.maxGradNorm,
+                config.beta,
+                config.desirableWeight,
+                config.undesirableWeight,
+                config.useStreamingKtoLoss,
+                config.gradientAccumulationSteps
+        );
+    }
+
     public TrainStepResult trainStep(
             int[] inputIds,
             float[] attentionMask,
@@ -173,6 +190,68 @@ public final class MobileFineTuner implements AutoCloseable {
         );
     }
 
+    public KtoStepResult trainKtoPreferenceBatch(
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            float[] refChosenLogps,
+            float[] refRejectedLogps,
+            int sequenceLength
+    ) {
+        return trainKtoPreferenceBatch(
+                prompts,
+                chosen,
+                rejected,
+                refChosenLogps,
+                refRejectedLogps,
+                sequenceLength,
+                false
+        );
+    }
+
+    public KtoStepResult trainKtoPreferenceBatch(
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            float[] refChosenLogps,
+            float[] refRejectedLogps,
+            int sequenceLength,
+            boolean appendEosToResponse
+    ) {
+        int batchSize = requireSameStringBatch(prompts, chosen, rejected);
+        requireLength(refChosenLogps, batchSize, "refChosenLogps");
+        requireLength(refRejectedLogps, batchSize, "refRejectedLogps");
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+
+        double[] result = nativeTrainKtoPreferenceBatch(
+                requireOpen(),
+                Arrays.copyOf(prompts, prompts.length),
+                Arrays.copyOf(chosen, chosen.length),
+                Arrays.copyOf(rejected, rejected.length),
+                Arrays.copyOf(refChosenLogps, refChosenLogps.length),
+                Arrays.copyOf(refRejectedLogps, refRejectedLogps.length),
+                sequenceLength,
+                appendEosToResponse
+        );
+        return new KtoStepResult(
+                (float) result[0],
+                (int) result[1],
+                (int) result[2],
+                (int) result[3],
+                (int) result[4],
+                (float) result[5],
+                (float) result[6],
+                (float) result[7],
+                (float) result[8],
+                (float) result[9],
+                (int) result[10],
+                (int) result[11],
+                result[12] != 0.0
+        );
+    }
+
     public PreferenceStepResult trainPreferenceBatch(
             String[] prompts,
             String[] chosen,
@@ -217,6 +296,51 @@ public final class MobileFineTuner implements AutoCloseable {
 
     public int trainableTensorCount() {
         return nativeTrainableTensorCount(requireOpen());
+    }
+
+    public PreferenceScoreResult scorePreferenceBatch(
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            int sequenceLength,
+            boolean appendEosToResponse
+    ) {
+        int batchSize = requireSameStringBatch(prompts, chosen, rejected);
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+        double[] result = nativeScorePreferenceBatch(
+                requireOpen(),
+                Arrays.copyOf(prompts, prompts.length),
+                Arrays.copyOf(chosen, chosen.length),
+                Arrays.copyOf(rejected, rejected.length),
+                sequenceLength,
+                appendEosToResponse
+        );
+        if (result.length != 1 + batchSize * 2) {
+            throw new IllegalStateException("Native score result has unexpected length");
+        }
+        float[] chosenLogps = new float[batchSize];
+        float[] rejectedLogps = new float[batchSize];
+        for (int i = 0; i < batchSize; ++i) {
+            chosenLogps[i] = (float) result[1 + i];
+            rejectedLogps[i] = (float) result[1 + batchSize + i];
+        }
+        return new PreferenceScoreResult((int) result[0], chosenLogps, rejectedLogps);
+    }
+
+    public void saveLoraAdapter(File path) {
+        if (path == null) {
+            throw new IllegalArgumentException("path must not be null");
+        }
+        nativeSaveLoraAdapter(requireOpen(), path.getAbsolutePath());
+    }
+
+    public void loadLoraAdapter(File path) {
+        if (path == null) {
+            throw new IllegalArgumentException("path must not be null");
+        }
+        nativeLoadLoraAdapter(requireOpen(), path.getAbsolutePath());
     }
 
     public String generate(String prompt, int maxNewTokens) {
@@ -321,6 +445,17 @@ public final class MobileFineTuner implements AutoCloseable {
             boolean useStreamingDpoLoss,
             int gradientAccumulationSteps
     );
+    private static native void nativeCreateKtoTrainer(
+            long handle,
+            float learningRate,
+            float weightDecay,
+            float maxGradNorm,
+            float beta,
+            float desirableWeight,
+            float undesirableWeight,
+            boolean useStreamingKtoLoss,
+            int gradientAccumulationSteps
+    );
     private static native double[] nativeTrainStep(
             long handle,
             int[] inputIds,
@@ -345,6 +480,26 @@ public final class MobileFineTuner implements AutoCloseable {
             int sequenceLength,
             boolean appendEosToResponse
     );
+    private static native double[] nativeTrainKtoPreferenceBatch(
+            long handle,
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            float[] refChosenLogps,
+            float[] refRejectedLogps,
+            int sequenceLength,
+            boolean appendEosToResponse
+    );
+    private static native double[] nativeScorePreferenceBatch(
+            long handle,
+            String[] prompts,
+            String[] chosen,
+            String[] rejected,
+            int sequenceLength,
+            boolean appendEosToResponse
+    );
+    private static native void nativeSaveLoraAdapter(long handle, String path);
+    private static native void nativeLoadLoraAdapter(long handle, String path);
     private static native int nativeTrainableTensorCount(long handle);
     private static native String nativeGenerate(
             long handle,
@@ -438,6 +593,63 @@ public final class MobileFineTuner implements AutoCloseable {
 
         public static DpoTrainerConfig defaults() {
             return new DpoTrainerConfig(2e-4f, 0.0f, 1.0f, 0.1f);
+        }
+    }
+
+    public static final class KtoTrainerConfig {
+        public final float learningRate;
+        public final float weightDecay;
+        public final float maxGradNorm;
+        public final float beta;
+        public final float desirableWeight;
+        public final float undesirableWeight;
+        public final boolean useStreamingKtoLoss;
+        public final int gradientAccumulationSteps;
+
+        public KtoTrainerConfig(float learningRate, float weightDecay, float maxGradNorm, float beta) {
+            this(learningRate, weightDecay, maxGradNorm, beta, 1.0f, 1.0f, true, 1);
+        }
+
+        public KtoTrainerConfig(
+                float learningRate,
+                float weightDecay,
+                float maxGradNorm,
+                float beta,
+                float desirableWeight,
+                float undesirableWeight,
+                boolean useStreamingKtoLoss,
+                int gradientAccumulationSteps
+        ) {
+            if (learningRate <= 0.0f) {
+                throw new IllegalArgumentException("learningRate must be positive");
+            }
+            if (weightDecay < 0.0f) {
+                throw new IllegalArgumentException("weightDecay must be non-negative");
+            }
+            if (maxGradNorm <= 0.0f) {
+                throw new IllegalArgumentException("maxGradNorm must be positive");
+            }
+            if (beta <= 0.0f) {
+                throw new IllegalArgumentException("beta must be positive");
+            }
+            if (desirableWeight <= 0.0f || undesirableWeight <= 0.0f) {
+                throw new IllegalArgumentException("KTO weights must be positive");
+            }
+            if (gradientAccumulationSteps <= 0) {
+                throw new IllegalArgumentException("gradientAccumulationSteps must be positive");
+            }
+            this.learningRate = learningRate;
+            this.weightDecay = weightDecay;
+            this.maxGradNorm = maxGradNorm;
+            this.beta = beta;
+            this.desirableWeight = desirableWeight;
+            this.undesirableWeight = undesirableWeight;
+            this.useStreamingKtoLoss = useStreamingKtoLoss;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
+        }
+
+        public static KtoTrainerConfig defaults() {
+            return new KtoTrainerConfig(2e-4f, 0.0f, 1.0f, 0.1f);
         }
     }
 
@@ -538,6 +750,68 @@ public final class MobileFineTuner implements AutoCloseable {
             this.accumulatedLoss = accumulatedLoss;
             this.chosenReward = chosenReward;
             this.rejectedReward = rejectedReward;
+            this.rewardMargin = rewardMargin;
+            this.rewardAccuracy = rewardAccuracy;
+            this.accumulationStep = accumulationStep;
+            this.gradientAccumulationSteps = gradientAccumulationSteps;
+            this.optimizerStep = optimizerStep;
+        }
+    }
+
+    public static final class PreferenceScoreResult {
+        public final int validResponseTokenCount;
+        public final float[] chosenLogps;
+        public final float[] rejectedLogps;
+
+        private PreferenceScoreResult(
+                int validResponseTokenCount,
+                float[] chosenLogps,
+                float[] rejectedLogps
+        ) {
+            this.validResponseTokenCount = validResponseTokenCount;
+            this.chosenLogps = Arrays.copyOf(chosenLogps, chosenLogps.length);
+            this.rejectedLogps = Arrays.copyOf(rejectedLogps, rejectedLogps.length);
+        }
+    }
+
+    public static final class KtoStepResult {
+        public final float loss;
+        public final int trainableTensorCount;
+        public final int pairCount;
+        public final int sampleCount;
+        public final int validResponseTokenCount;
+        public final float accumulatedLoss;
+        public final float desirableReward;
+        public final float undesirableReward;
+        public final float rewardMargin;
+        public final float rewardAccuracy;
+        public final int accumulationStep;
+        public final int gradientAccumulationSteps;
+        public final boolean optimizerStep;
+
+        private KtoStepResult(
+                float loss,
+                int trainableTensorCount,
+                int pairCount,
+                int sampleCount,
+                int validResponseTokenCount,
+                float accumulatedLoss,
+                float desirableReward,
+                float undesirableReward,
+                float rewardMargin,
+                float rewardAccuracy,
+                int accumulationStep,
+                int gradientAccumulationSteps,
+                boolean optimizerStep
+        ) {
+            this.loss = loss;
+            this.trainableTensorCount = trainableTensorCount;
+            this.pairCount = pairCount;
+            this.sampleCount = sampleCount;
+            this.validResponseTokenCount = validResponseTokenCount;
+            this.accumulatedLoss = accumulatedLoss;
+            this.desirableReward = desirableReward;
+            this.undesirableReward = undesirableReward;
             this.rewardMargin = rewardMargin;
             this.rewardAccuracy = rewardAccuracy;
             this.accumulationStep = accumulationStep;

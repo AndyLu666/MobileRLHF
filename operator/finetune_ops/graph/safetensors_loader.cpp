@@ -672,11 +672,8 @@ QwenKeyMapper::generate_qwen_mapping(int num_layers) {
         m[in + "input_norm.weight"] = hf + "input_layernorm.weight";
         m[in + "post_norm.weight"] = hf + "post_attention_layernorm.weight";
         m[in + "self_attn.q_proj.weight"] = hf + "self_attn.q_proj.weight";
-        m[in + "self_attn.q_proj.bias"]   = hf + "self_attn.q_proj.bias";
         m[in + "self_attn.k_proj.weight"] = hf + "self_attn.k_proj.weight";
-        m[in + "self_attn.k_proj.bias"]   = hf + "self_attn.k_proj.bias";
         m[in + "self_attn.v_proj.weight"] = hf + "self_attn.v_proj.weight";
-        m[in + "self_attn.v_proj.bias"]   = hf + "self_attn.v_proj.bias";
         m[in + "self_attn.o_proj.weight"] = hf + "self_attn.o_proj.weight";
         m[in + "self_attn.q_norm.weight"] = hf + "self_attn.q_norm.weight";
         m[in + "self_attn.k_norm.weight"] = hf + "self_attn.k_norm.weight";

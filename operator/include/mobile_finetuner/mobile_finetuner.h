@@ -36,6 +36,8 @@
 #include "finetune_ops/optim/adam.h"
 #include "finetune_ops/optim/auto_trainer.h"
 #include "finetune_ops/optim/dpo_trainer.h"
+#include "finetune_ops/optim/kto_trainer.h"
+#include "finetune_ops/optim/preference_scoring.h"
 #include "finetune_ops/optim/gemma_trainer.h"
 #include "finetune_ops/optim/optimizer.h"
 #include "finetune_ops/optim/trainer.h"

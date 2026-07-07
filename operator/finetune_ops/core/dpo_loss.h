@@ -89,11 +89,46 @@ TensorPtr streaming_dpo_loss_with_ref_logps(const TensorPtr& chosen_hidden,
                                             const TensorPtr& rejected_response_mask,
                                             float beta);
 
+/**
+ * @brief KTO loss from dense policy logits and cached frozen-reference logps.
+ *
+ * labels uses +1 for desirable samples and -1 for undesirable samples.
+ * Gradients flow only through policy_logits.
+ */
+TensorPtr kto_loss_with_ref_logps(const TensorPtr& policy_logits,
+                                  const std::vector<float>& ref_logps,
+                                  const TensorPtr& input_ids,
+                                  const TensorPtr& response_mask,
+                                  const std::vector<float>& labels,
+                                  float beta,
+                                  float desirable_weight = 1.0f,
+                                  float undesirable_weight = 1.0f);
+
+/**
+ * @brief Memory-first KTO loss from policy hidden states and cached ref logps.
+ */
+TensorPtr streaming_kto_loss_with_ref_logps(const TensorPtr& hidden,
+                                            const TensorPtr& lm_head_weight,
+                                            const std::vector<float>& ref_logps,
+                                            const TensorPtr& input_ids,
+                                            const TensorPtr& response_mask,
+                                            const std::vector<float>& labels,
+                                            float beta,
+                                            float desirable_weight = 1.0f,
+                                            float undesirable_weight = 1.0f);
+
 DPOMetrics compute_dpo_metrics_from_logps(const std::vector<float>& policy_chosen_logps,
                                           const std::vector<float>& policy_rejected_logps,
                                           const std::vector<float>& ref_chosen_logps,
                                           const std::vector<float>& ref_rejected_logps,
                                           float beta);
+
+DPOMetrics compute_kto_metrics_from_logps(const std::vector<float>& policy_logps,
+                                          const std::vector<float>& ref_logps,
+                                          const std::vector<float>& labels,
+                                          float beta,
+                                          float desirable_weight = 1.0f,
+                                          float undesirable_weight = 1.0f);
 
 DPOMetrics compute_dpo_metrics_from_logits(const TensorPtr& policy_chosen_logits,
                                            const TensorPtr& policy_rejected_logits,
@@ -127,5 +162,16 @@ DPOMetrics compute_dpo_metrics_from_policy_hidden_and_ref_logps(
     const TensorPtr& chosen_response_mask,
     const TensorPtr& rejected_response_mask,
     float beta);
+
+DPOMetrics compute_kto_metrics_from_policy_hidden_and_ref_logps(
+    const TensorPtr& hidden,
+    const TensorPtr& lm_head_weight,
+    const std::vector<float>& ref_logps,
+    const TensorPtr& input_ids,
+    const TensorPtr& response_mask,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight = 1.0f,
+    float undesirable_weight = 1.0f);
 
 }  // namespace ops

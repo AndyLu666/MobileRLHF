@@ -646,35 +646,17 @@ external artifact directory; these paths are intentionally ignored by Git.
 
 ## Project Structure
 
-```
-MobileFineTuner/
-├── operator/                           # Core C++ framework
-│   ├── finetune_ops/
-│   │   ├── core/                       # Tensor, autograd, memory manager
-│   │   ├── graph/                      # GPT-2, Gemma, Qwen, Llama graphs
-│   │   ├── nn/                         # LoRA layers
-│   │   ├── optim/                      # Optimizers and trainers
-│   │   └── data/                       # WikiText-2, MMLU dataset loaders/tokenizers
-│   ├── include/mobile_finetuner/       # Stable public umbrella header
-│   ├── cmake/                          # CMake package config templates
-│   └── CMakeLists.txt
-├── examples/                           # Runnable model-specific applications
-│   ├── common/                         # Shared example-only evaluation helpers
-│   ├── gpt2_small_lora_finetune/       # GPT-2 Small LoRA + full FT
-│   ├── gpt2_medium_lora_finetune/      # GPT-2 Medium LoRA
-│   ├── gemma_3_270m_lora_finetune/     # Gemma 270M LoRA
-│   ├── gemma_3_1b_pt_lora_finetune/    # Gemma 1B-PT LoRA
-│   └── qwen_lora_finetune/             # Qwen3-0.6B LoRA
-├── scripts/                            # Automation and orchestration
-│   ├── android/                        # Native Android build/run helpers
-│   ├── lib/                            # Shared shell helpers
-│   ├── run_training_smoke.sh
-│   └── run_training_real_assets.sh
-└── README.md
-```
+Start with [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the maintained
+directory map. In short:
 
-Local data, run-output, review, and archive directories may exist in developer
-checkouts, but they are ignored and excluded from source releases.
+- `operator/` is the reusable C++ training core.
+- `examples/` contains model-specific native CLIs.
+- `android-visualizer/` contains the Android app, SDK module, and sample app.
+- `pytorch_alignment/` contains lightweight Python DPO/KTO reference utilities.
+- `scripts/` contains stable repo-level automation.
+- `review-stage/` contains research-stage datasets, notes, and validation
+  harnesses.
+- `runs/` and `data/` are local runtime/output areas and are ignored by Git.
 
 ```bash
 ctest --output-on-failure
@@ -710,14 +692,21 @@ cd android-visualizer
 
 ## PyTorch 对齐
 
-`pytorch_alignment/` 目录提供了 GPT-2、Gemma、Qwen 的 PyTorch 参考实现，用来和 C++ 路径做：
+`pytorch_alignment/` 目录提供轻量级 PyTorch 对齐参考工具，用来在进入
+C++ / Android 路径前验证数据格式、loss、metrics 和反传行为：
 
-- loss 曲线对齐
-- 梯度行为对齐
-- LoRA adapter 导出结果对齐
-- SFT / DPO 迁移验证
+- DPO / KTO 数据加载和 collate
+- sequence log-prob、DPO loss、KTO loss
+- reward metrics 和 eval helpers
+- tiny smoke 中的梯度/冻结 reference 检查
 
-这个子目录的 README 已经是中文文档。
+KTO 当前一键 smoke 入口：
+
+```bash
+bash scripts/run_kto_health_smoke.sh
+```
+
+更多说明见 [pytorch_alignment/README.md](pytorch_alignment/README.md)。
 
 ## Android 可视化
 

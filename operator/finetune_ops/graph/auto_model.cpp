@@ -4,7 +4,12 @@
 #include "model_family_adapter.h"
 
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 namespace ops {
@@ -19,6 +24,112 @@ FamilyLoraRequest make_family_lora_request(const AutoLoraConfig& cfg) {
     request.seed = cfg.seed;
     request.target_modules = cfg.target_modules;
     return request;
+}
+
+std::string json_escape(const std::string& value) {
+    std::string out;
+    out.reserve(value.size());
+    for (char ch : value) {
+        if (ch == '\\' || ch == '"') {
+            out.push_back('\\');
+        }
+        out.push_back(ch);
+    }
+    return out;
+}
+
+std::string shape_to_json(const std::vector<int64_t>& shape) {
+    std::ostringstream oss;
+    oss << "[";
+    for (std::size_t i = 0; i < shape.size(); ++i) {
+        if (i != 0) {
+            oss << ",";
+        }
+        oss << shape[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+std::string tensor_data_to_json(const TensorPtr& tensor) {
+    if (!tensor || tensor->dtype() != kFloat32) {
+        throw std::runtime_error("LoRA adapter JSONL only supports float32 tensors");
+    }
+    std::ostringstream oss;
+    oss << "[";
+    const float* data = tensor->data<float>();
+    for (int64_t i = 0; i < tensor->numel(); ++i) {
+        if (i != 0) {
+            oss << ",";
+        }
+        oss << data[i];
+    }
+    oss << "]";
+    return oss.str();
+}
+
+std::string extract_json_string_field(const std::string& line, const std::string& key) {
+    const std::string marker = "\"" + key + "\":\"";
+    const std::size_t start = line.find(marker);
+    if (start == std::string::npos) {
+        return {};
+    }
+    std::string out;
+    bool escaped = false;
+    for (std::size_t i = start + marker.size(); i < line.size(); ++i) {
+        const char ch = line[i];
+        if (escaped) {
+            out.push_back(ch);
+            escaped = false;
+        } else if (ch == '\\') {
+            escaped = true;
+        } else if (ch == '"') {
+            return out;
+        } else {
+            out.push_back(ch);
+        }
+    }
+    return {};
+}
+
+std::string extract_json_array_field(const std::string& line, const std::string& key) {
+    const std::string marker = "\"" + key + "\":[";
+    const std::size_t start = line.find(marker);
+    if (start == std::string::npos) {
+        return {};
+    }
+    const std::size_t value_start = start + marker.size();
+    const std::size_t end = line.find(']', value_start);
+    if (end == std::string::npos) {
+        return {};
+    }
+    return line.substr(value_start, end - value_start);
+}
+
+std::vector<int64_t> parse_shape_list(const std::string& text) {
+    std::vector<int64_t> values;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (item.empty()) {
+            continue;
+        }
+        values.push_back(std::stoll(item));
+    }
+    return values;
+}
+
+std::vector<float> parse_float_list(const std::string& text) {
+    std::vector<float> values;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (item.empty()) {
+            continue;
+        }
+        values.push_back(std::stof(item));
+    }
+    return values;
 }
 
 }  // namespace
@@ -261,6 +372,82 @@ std::vector<std::pair<std::string, TensorPtr>> AutoModelForCausalLM::named_train
             return qwen_->named_lora_parameters();
         default:
             throw std::runtime_error("AutoModelForCausalLM: unsupported model family");
+    }
+}
+
+void AutoModelForCausalLM::save_lora_adapter_jsonl(const std::string& path) {
+    const auto tensors = named_trainable_parameters();
+    if (tensors.empty()) {
+        throw std::runtime_error("save_lora_adapter_jsonl: no LoRA trainable parameters to save");
+    }
+
+    std::filesystem::path adapter_path(path);
+    if (adapter_path.has_parent_path()) {
+        std::filesystem::create_directories(adapter_path.parent_path());
+    }
+    std::ofstream out(path);
+    if (!out.is_open()) {
+        throw std::runtime_error("save_lora_adapter_jsonl: failed to open " + path);
+    }
+    out << "{\"format\":\"mobile_finetuner.lora_adapter_jsonl.v1\"}\n";
+    for (const auto& kv : tensors) {
+        if (!kv.second || kv.second->dtype() != kFloat32) {
+            throw std::runtime_error("save_lora_adapter_jsonl: trainable parameter is not float32: " + kv.first);
+        }
+        out << "{\"name\":\"" << json_escape(kv.first)
+            << "\",\"shape\":" << shape_to_json(kv.second->shape())
+            << ",\"data\":" << tensor_data_to_json(kv.second)
+            << "}\n";
+    }
+}
+
+void AutoModelForCausalLM::load_lora_adapter_jsonl(const std::string& path) {
+    auto tensors = named_trainable_parameters();
+    if (tensors.empty()) {
+        throw std::runtime_error("load_lora_adapter_jsonl: initialize LoRA before loading adapter");
+    }
+    std::unordered_map<std::string, TensorPtr> by_name;
+    for (const auto& kv : tensors) {
+        by_name.emplace(kv.first, kv.second);
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        throw std::runtime_error("load_lora_adapter_jsonl: failed to open " + path);
+    }
+
+    std::string line;
+    int loaded = 0;
+    while (std::getline(in, line)) {
+        if (line.empty() || line.find("\"format\"") != std::string::npos) {
+            continue;
+        }
+        const std::string name = extract_json_string_field(line, "name");
+        const auto shape = parse_shape_list(extract_json_array_field(line, "shape"));
+        const auto data = parse_float_list(extract_json_array_field(line, "data"));
+        if (name.empty() || shape.empty()) {
+            throw std::runtime_error("load_lora_adapter_jsonl: malformed tensor record");
+        }
+        auto it = by_name.find(name);
+        if (it == by_name.end()) {
+            throw std::runtime_error("load_lora_adapter_jsonl: adapter tensor not present in model: " + name);
+        }
+        TensorPtr tensor = it->second;
+        if (tensor->dtype() != kFloat32) {
+            throw std::runtime_error("load_lora_adapter_jsonl: target tensor is not float32: " + name);
+        }
+        if (tensor->shape() != shape) {
+            throw std::runtime_error("load_lora_adapter_jsonl: shape mismatch for " + name);
+        }
+        if (static_cast<int64_t>(data.size()) != tensor->numel()) {
+            throw std::runtime_error("load_lora_adapter_jsonl: data length mismatch for " + name);
+        }
+        float* dst = tensor->data<float>();
+        std::copy(data.begin(), data.end(), dst);
+        ++loaded;
+    }
+    if (loaded == 0) {
+        throw std::runtime_error("load_lora_adapter_jsonl: adapter file did not contain any tensors");
     }
 }
 

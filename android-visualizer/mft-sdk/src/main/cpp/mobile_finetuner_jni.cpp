@@ -25,6 +25,7 @@ struct NativeSession {
     std::unique_ptr<ops::Tokenizer> tokenizer;
     std::unique_ptr<ops::AutoTrainer> trainer;
     std::unique_ptr<ops::DPOTrainer> dpo_trainer;
+    std::unique_ptr<ops::KTOTrainer> kto_trainer;
 };
 
 void throw_java(JNIEnv* env, const char* class_name, const std::string& message) {
@@ -355,7 +356,7 @@ void fill_parameters(ops::AutoModelForCausalLM& model, float value) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeBuildInfo(JNIEnv* env, jclass) {
-    return env->NewStringUTF("MobileFineTuner Android SDK JNI: AutoModelForCausalLM + AutoTrainer + DPOTrainer");
+    return env->NewStringUTF("MobileFineTuner Android SDK JNI: AutoModelForCausalLM + AutoTrainer + DPOTrainer + KTOTrainer");
 }
 
 extern "C" JNIEXPORT jdoubleArray JNICALL
@@ -539,6 +540,41 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateDpoTrainer(
         config.use_streaming_dpo_loss = use_streaming_dpo_loss == JNI_TRUE;
         config.gradient_accumulation_steps = gradient_accumulation_steps;
         session->dpo_trainer = std::make_unique<ops::DPOTrainer>(*session->model, config);
+    });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeCreateKtoTrainer(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jfloat learning_rate,
+        jfloat weight_decay,
+        jfloat max_grad_norm,
+        jfloat beta,
+        jfloat desirable_weight,
+        jfloat undesirable_weight,
+        jboolean use_streaming_kto_loss,
+        jint gradient_accumulation_steps) {
+    guarded_void(env, [&]() {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+
+        ops::KTOTrainerConfig config;
+        config.learning_rate = learning_rate;
+        config.weight_decay = weight_decay;
+        config.max_grad_norm = max_grad_norm;
+        config.beta = beta;
+        config.desirable_weight = desirable_weight;
+        config.undesirable_weight = undesirable_weight;
+        config.use_streaming_kto_loss = use_streaming_kto_loss == JNI_TRUE;
+        config.gradient_accumulation_steps = gradient_accumulation_steps;
+        session->kto_trainer = std::make_unique<ops::KTOTrainer>(*session->model, config);
     });
 }
 
@@ -734,6 +770,205 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainPreferenceBatch(
         };
         return make_double_array(env, values, 12);
     }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainKtoPreferenceBatch(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jobjectArray prompts,
+        jobjectArray chosen,
+        jobjectArray rejected,
+        jfloatArray ref_chosen_logps,
+        jfloatArray ref_rejected_logps,
+        jint sequence_length,
+        jboolean append_eos_to_response) {
+    return guarded(env, [&]() -> jdoubleArray {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->kto_trainer) {
+            throw std::runtime_error("KTO trainer is not initialized; call createKtoTrainer first");
+        }
+        if (sequence_length <= 1) {
+            throw std::invalid_argument("sequenceLength must be > 1");
+        }
+
+        auto prompt_rows = copy_string_array(env, prompts, "prompts");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto chosen_rows = copy_string_array(env, chosen, "chosen");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto rejected_rows = copy_string_array(env, rejected, "rejected");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        if (chosen_rows.size() != prompt_rows.size() || rejected_rows.size() != prompt_rows.size()) {
+            throw std::invalid_argument("preference text arrays must have the same length");
+        }
+
+        const int64_t count = static_cast<int64_t>(prompt_rows.size());
+        auto ref_chosen = copy_float_array(env, ref_chosen_logps, count, "refChosenLogps");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto ref_rejected = copy_float_array(env, ref_rejected_logps, count, "refRejectedLogps");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+
+        std::vector<ops::PreferenceSample> samples;
+        samples.reserve(prompt_rows.size());
+        for (size_t i = 0; i < prompt_rows.size(); ++i) {
+            ops::PreferenceSample sample;
+            sample.prompt = std::move(prompt_rows[i]);
+            sample.chosen = std::move(chosen_rows[i]);
+            sample.rejected = std::move(rejected_rows[i]);
+            sample.has_reference_logps = true;
+            sample.ref_chosen_logp = ref_chosen[i];
+            sample.ref_rejected_logp = ref_rejected[i];
+            samples.push_back(std::move(sample));
+        }
+
+        ops::PreferenceBatchConfig batch_cfg;
+        batch_cfg.sequence_length = sequence_length;
+        batch_cfg.append_eos_to_response = append_eos_to_response == JNI_TRUE;
+        auto batch = ops::make_preference_batch(require_tokenizer(*session), samples, batch_cfg);
+        const ops::KTOTrainStepResult result = session->kto_trainer->train_step(batch);
+
+        jdouble values[13] = {
+            static_cast<jdouble>(result.loss),
+            static_cast<jdouble>(result.trainable_tensor_count),
+            static_cast<jdouble>(result.pair_count),
+            static_cast<jdouble>(result.sample_count),
+            static_cast<jdouble>(result.valid_response_token_count),
+            static_cast<jdouble>(result.accumulated_loss),
+            static_cast<jdouble>(result.desirable_reward),
+            static_cast<jdouble>(result.undesirable_reward),
+            static_cast<jdouble>(result.reward_margin),
+            static_cast<jdouble>(result.reward_accuracy),
+            static_cast<jdouble>(result.accumulation_step),
+            static_cast<jdouble>(result.gradient_accumulation_steps),
+            result.optimizer_step ? 1.0 : 0.0
+        };
+        return make_double_array(env, values, 13);
+    }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeScorePreferenceBatch(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jobjectArray prompts,
+        jobjectArray chosen,
+        jobjectArray rejected,
+        jint sequence_length,
+        jboolean append_eos_to_response) {
+    return guarded(env, [&]() -> jdoubleArray {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+        if (sequence_length <= 1) {
+            throw std::invalid_argument("sequenceLength must be > 1");
+        }
+
+        auto prompt_rows = copy_string_array(env, prompts, "prompts");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto chosen_rows = copy_string_array(env, chosen, "chosen");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto rejected_rows = copy_string_array(env, rejected, "rejected");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        if (chosen_rows.size() != prompt_rows.size() || rejected_rows.size() != prompt_rows.size()) {
+            throw std::invalid_argument("preference text arrays must have the same length");
+        }
+
+        std::vector<ops::PreferenceSample> samples;
+        samples.reserve(prompt_rows.size());
+        for (size_t i = 0; i < prompt_rows.size(); ++i) {
+            ops::PreferenceSample sample;
+            sample.prompt = std::move(prompt_rows[i]);
+            sample.chosen = std::move(chosen_rows[i]);
+            sample.rejected = std::move(rejected_rows[i]);
+            samples.push_back(std::move(sample));
+        }
+
+        ops::PreferenceBatchConfig batch_cfg;
+        batch_cfg.sequence_length = sequence_length;
+        batch_cfg.append_eos_to_response = append_eos_to_response == JNI_TRUE;
+        auto batch = ops::make_preference_batch(require_tokenizer(*session), samples, batch_cfg);
+        const ops::PreferenceLogps scores = ops::score_preference_logps(*session->model, batch);
+
+        std::vector<jdouble> values;
+        values.reserve(1 + scores.chosen_logps.size() + scores.rejected_logps.size());
+        values.push_back(static_cast<jdouble>(scores.valid_response_token_count));
+        for (float value : scores.chosen_logps) {
+            values.push_back(static_cast<jdouble>(value));
+        }
+        for (float value : scores.rejected_logps) {
+            values.push_back(static_cast<jdouble>(value));
+        }
+        return make_double_array(env, values.data(), static_cast<jsize>(values.size()));
+    }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeSaveLoraAdapter(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jstring path) {
+    guarded_void(env, [&]() {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+        const std::string adapter_path = to_string(env, path);
+        if (adapter_path.empty()) {
+            throw std::invalid_argument("adapter path must not be empty");
+        }
+        session->model->save_lora_adapter_jsonl(adapter_path);
+    });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeLoadLoraAdapter(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jstring path) {
+    guarded_void(env, [&]() {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+        const std::string adapter_path = to_string(env, path);
+        if (adapter_path.empty()) {
+            throw std::invalid_argument("adapter path must not be empty");
+        }
+        session->model->load_lora_adapter_jsonl(adapter_path);
+    });
 }
 
 extern "C" JNIEXPORT jint JNICALL

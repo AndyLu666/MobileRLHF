@@ -1,6 +1,7 @@
 #include "model_registry.h"
 #include "model_family_adapter.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -177,6 +178,12 @@ void test_family_adapter_load_options() {
 
     auto qwen = ops::load_options_for_family(ops::ModelFamily::Qwen, base, false);
     require(qwen.transpose_linear, "Qwen load policy should transpose HF linear weights");
+    require(!qwen.preserve_low_precision_key_substrings.empty(),
+            "Qwen load policy should preserve low-precision frozen base weights");
+    require(std::find(qwen.preserve_low_precision_key_substrings.begin(),
+                      qwen.preserve_low_precision_key_substrings.end(),
+                      "q_proj.weight") != qwen.preserve_low_precision_key_substrings.end(),
+            "Qwen load policy should preserve attention projection weights");
 
     auto llama = ops::load_options_for_family(ops::ModelFamily::Llama, base, true);
     require(llama.transpose_linear, "Llama load policy should transpose HF linear weights");

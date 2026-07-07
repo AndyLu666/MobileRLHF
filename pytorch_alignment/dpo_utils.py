@@ -164,14 +164,18 @@ def compute_kto_batch_metrics(
     with torch.no_grad():
         ref_out = ref_model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
         ref_logps = sequence_logprob(ref_out.logits, batch["input_ids"], batch["response_mask"])
-    rewards = beta * (policy_logps - ref_logps)
+    logratios = policy_logps - ref_logps
+    kl_center = torch.clamp(logratios.mean().detach(), min=0.0)
+    rewards = beta * (logratios - kl_center)
     labels = batch["label"].to(dtype=rewards.dtype)
     weights = torch.where(
         labels > 0,
         rewards.new_tensor(desirable_weight),
         rewards.new_tensor(undesirable_weight),
     )
-    losses = -torch.nn.functional.logsigmoid(labels * rewards) * weights
+    desirable_losses = 1.0 - torch.sigmoid(rewards)
+    undesirable_losses = 1.0 - torch.sigmoid(-rewards)
+    losses = torch.where(labels > 0, desirable_losses, undesirable_losses) * weights
     desirable_mask = labels > 0
     undesirable_mask = labels < 0
     desirable_reward = rewards[desirable_mask].mean() if desirable_mask.any() else rewards.new_tensor(0.0)
@@ -180,8 +184,9 @@ def compute_kto_batch_metrics(
         "loss": losses.mean(),
         "reward_accuracy": ((labels * rewards) > 0).float().mean(),
         "reward_margin": desirable_reward - undesirable_reward,
-        "chosen_reward": desirable_reward,
-        "rejected_reward": undesirable_reward,
+        "desirable_reward": desirable_reward,
+        "undesirable_reward": undesirable_reward,
+        "kl_center": kl_center,
     }
 
 
@@ -200,8 +205,9 @@ def evaluate_kto(
         "loss": 0.0,
         "reward_accuracy": 0.0,
         "reward_margin": 0.0,
-        "chosen_reward": 0.0,
-        "rejected_reward": 0.0,
+        "desirable_reward": 0.0,
+        "undesirable_reward": 0.0,
+        "kl_center": 0.0,
     }
     count = 0
     with torch.no_grad():

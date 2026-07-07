@@ -50,7 +50,11 @@ review-stage/phone_artifacts/
 *.xlsx
 *.log
 *.jsonl
+!review-stage/
+!review-stage/data/
 !review-stage/data/*.jsonl
+!review-stage/scripts/
+!review-stage/scripts/kto_sanity_check.py
 !android-visualizer/app/src/main/assets/**/*.jsonl
 
 # Local QA artifacts and downloaded third-party source trees

@@ -56,6 +56,30 @@ void test_metrics_from_logps() {
     require_close(m.reward_accuracy, 0.0f, 1e-6f, "DPO reward accuracy");
 }
 
+void test_kto_metrics_from_logps() {
+    const std::vector<float> policy{-1.0f, -2.0f};
+    const std::vector<float> reference{-1.5f, -1.0f};
+    const std::vector<float> labels{1.0f, -1.0f};
+    const float beta = 0.2f;
+    const DPOMetrics m = compute_kto_metrics_from_logps(
+        policy, reference, labels, beta, 1.0f, 1.0f);
+
+    const double logratio0 = policy[0] - reference[0];
+    const double logratio1 = policy[1] - reference[1];
+    const double kl_center = std::max((logratio0 + logratio1) / 2.0, 0.0);
+    const double reward0 = beta * (logratio0 - kl_center);
+    const double reward1 = beta * (logratio1 - kl_center);
+    const double expected_loss =
+        ((1.0 - (1.0 / (1.0 + std::exp(-reward0)))) +
+         (1.0 - (1.0 / (1.0 + std::exp(reward1))))) / 2.0;
+
+    require_close(m.loss, static_cast<float>(expected_loss), 1e-6f, "KTO metrics loss");
+    require_close(m.chosen_reward, static_cast<float>(reward0), 1e-6f, "KTO desirable reward");
+    require_close(m.rejected_reward, static_cast<float>(reward1), 1e-6f, "KTO undesirable reward");
+    require_close(m.reward_margin, static_cast<float>(reward0 - reward1), 1e-6f, "KTO reward margin");
+    require_close(m.reward_accuracy, 1.0f, 1e-6f, "KTO reward accuracy");
+}
+
 void test_dense_backward_has_policy_grads() {
     auto A = zeros({2, 2}, kFloat32, kCPU);
     auto B = zeros({2, 3}, kFloat32, kCPU);
@@ -166,12 +190,59 @@ void test_streaming_matches_dense_loss_and_grad() {
             "streaming weight grad mismatch");
 }
 
+void test_streaming_kto_matches_dense_loss_and_grad() {
+    const int64_t Bsz = 2;
+    const int64_t S = 3;
+    const int64_t H = 2;
+    const int64_t V = 4;
+    std::vector<float> values = {
+        0.1f, -0.2f, 0.3f, 0.4f, -0.5f, 0.2f,
+        -0.1f, 0.2f, 0.0f, 0.3f, 0.4f, -0.2f,
+    };
+    std::vector<float> weight_values = {
+        0.2f, -0.1f,
+        -0.3f, 0.4f,
+        0.1f, 0.2f,
+        -0.2f, 0.3f,
+    };
+    auto ids = make_i32({Bsz, S}, {0, 1, 2, 0, 2, 3});
+    auto response_mask = make_i32({Bsz, S}, {0, 1, 1, 0, 1, 1});
+    const std::vector<float> ref_logps{0.0f, -0.1f};
+    const std::vector<float> labels{1.0f, -1.0f};
+
+    auto dense_hidden = std::make_shared<Tensor>(std::vector<int64_t>{Bsz, S, H}, values.data(), kFloat32, kCPU);
+    auto dense_weight = std::make_shared<Tensor>(std::vector<int64_t>{V, H}, weight_values.data(), kFloat32, kCPU);
+    dense_hidden->set_requires_grad(true);
+    dense_weight->set_requires_grad(true);
+    auto dense_logits = matmul_rhs_T(dense_hidden, dense_weight);
+    auto dense_loss = kto_loss_with_ref_logps(
+        dense_logits, ref_logps, ids, response_mask, labels, 0.2f, 1.0f, 1.0f);
+    dense_loss->backward();
+
+    auto stream_hidden = std::make_shared<Tensor>(std::vector<int64_t>{Bsz, S, H}, values.data(), kFloat32, kCPU);
+    auto stream_weight = std::make_shared<Tensor>(std::vector<int64_t>{V, H}, weight_values.data(), kFloat32, kCPU);
+    stream_hidden->set_requires_grad(true);
+    stream_weight->set_requires_grad(true);
+    auto streaming_loss = streaming_kto_loss_with_ref_logps(
+        stream_hidden, stream_weight, ref_logps, ids, response_mask, labels, 0.2f, 1.0f, 1.0f);
+    streaming_loss->backward();
+
+    require_close(streaming_loss->data<float>()[0], dense_loss->data<float>()[0],
+                  1e-5f, "streaming KTO loss");
+    require(max_abs_diff(stream_hidden->grad(), dense_hidden->grad()) < 1e-5f,
+            "streaming KTO hidden grad mismatch");
+    require(max_abs_diff(stream_weight->grad(), dense_weight->grad()) < 1e-5f,
+            "streaming KTO weight grad mismatch");
+}
+
 }  // namespace
 
 int main() {
     test_metrics_from_logps();
+    test_kto_metrics_from_logps();
     test_dense_backward_has_policy_grads();
     test_streaming_matches_dense_loss_and_grad();
+    test_streaming_kto_matches_dense_loss_and_grad();
     std::cout << "[PASS] DPO loss tests passed\n";
     return 0;
 }

@@ -145,6 +145,22 @@ TensorPtr make_incremental_causal_mask(int64_t cur_len, int64_t total_len, int64
     return mask;
 }
 
+bool qwen_should_defer_large_placeholders(const QwenConfig& cfg) {
+    const int64_t Hd = cfg.head_dim;
+    const int64_t attn_out = cfg.num_attention_heads * Hd;
+    const int64_t kv_out = cfg.num_key_value_heads * Hd;
+    const int64_t per_layer_large =
+        cfg.hidden_size * attn_out +
+        2LL * cfg.hidden_size * kv_out +
+        attn_out * cfg.hidden_size +
+        2LL * cfg.hidden_size * cfg.intermediate_size +
+        cfg.intermediate_size * cfg.hidden_size;
+    const int64_t embedding_large = 2LL * cfg.vocab_size * cfg.hidden_size;
+    const int64_t total_large =
+        embedding_large + static_cast<int64_t>(cfg.num_hidden_layers) * per_layer_large;
+    return total_large > 100'000'000LL;
+}
+
 } // namespace
 
 void QwenKVCache::reset(size_t num_layers) {
@@ -205,8 +221,11 @@ QwenConfig QwenConfig::from_pretrained(const std::string& path) {
 
 // -------------- Construction --------------
 QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
-    embed_tokens_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.vocab_size, cfg.hidden_size}, kFloat32, kCPU);
-    lm_head_weight_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.vocab_size}, kFloat32, kCPU);
+    const bool defer_large_placeholders = qwen_should_defer_large_placeholders(cfg);
+    if (!defer_large_placeholders) {
+        embed_tokens_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.vocab_size, cfg.hidden_size}, kFloat32, kCPU);
+        lm_head_weight_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.vocab_size}, kFloat32, kCPU);
+    }
     final_norm_weight_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size}, kFloat32, kCPU);
     layers_.resize(cfg.num_hidden_layers);
     for (int i = 0; i < cfg.num_hidden_layers; ++i) {
@@ -228,6 +247,15 @@ QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
         b.gate_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.intermediate_size}, kFloat32, kCPU);
         b.up_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.hidden_size, cfg.intermediate_size}, kFloat32, kCPU);
         b.down_proj_weight = std::make_shared<Tensor>(std::vector<int64_t>{cfg.intermediate_size, cfg.hidden_size}, kFloat32, kCPU);
+        if (defer_large_placeholders) {
+            b.q_proj_weight.reset();
+            b.k_proj_weight.reset();
+            b.v_proj_weight.reset();
+            b.o_proj_weight.reset();
+            b.gate_proj_weight.reset();
+            b.up_proj_weight.reset();
+            b.down_proj_weight.reset();
+        }
     }
 }
 
@@ -286,6 +314,9 @@ void QwenModel::init_lora(int rank, float alpha, float dropout [[maybe_unused]],
     for (size_t layer_idx = 0; layer_idx < layers_.size(); ++layer_idx) {
         auto& b = layers_[layer_idx];
         if (b.lora_initialized) continue;
+        if (!b.q_proj_weight || !b.k_proj_weight || !b.v_proj_weight || !b.o_proj_weight) {
+            throw std::runtime_error("QwenModel::init_lora requires pretrained attention weights to be loaded");
+        }
         
         // Create LoRALinear wrappers
         b.q_lin = std::make_unique<LoRALinear>(b.q_proj_weight, b.q_proj_bias);
@@ -379,24 +410,29 @@ std::vector<std::pair<std::string, TensorPtr>> QwenModel::named_lora_parameters(
 std::vector<TensorPtr> QwenModel::parameters() const {
     std::vector<TensorPtr> params;
     params.reserve(3 + static_cast<size_t>(config_.num_hidden_layers) * 14);
-    params.push_back(embed_tokens_);
-    params.push_back(lm_head_weight_);
-    params.push_back(final_norm_weight_);
+    auto add = [&](const TensorPtr& t) {
+        if (t) {
+            params.push_back(t);
+        }
+    };
+    add(embed_tokens_);
+    add(lm_head_weight_);
+    add(final_norm_weight_);
     for (const auto& b : layers_) {
-        params.push_back(b.input_norm_weight);
-        params.push_back(b.post_norm_weight);
-        params.push_back(b.q_proj_weight);
-        params.push_back(b.q_proj_bias);
-        params.push_back(b.k_proj_weight);
-        params.push_back(b.k_proj_bias);
-        params.push_back(b.v_proj_weight);
-        params.push_back(b.v_proj_bias);
-        params.push_back(b.o_proj_weight);
-        params.push_back(b.q_norm_weight);
-        params.push_back(b.k_norm_weight);
-        params.push_back(b.gate_proj_weight);
-        params.push_back(b.up_proj_weight);
-        params.push_back(b.down_proj_weight);
+        add(b.input_norm_weight);
+        add(b.post_norm_weight);
+        add(b.q_proj_weight);
+        add(b.q_proj_bias);
+        add(b.k_proj_weight);
+        add(b.k_proj_bias);
+        add(b.v_proj_weight);
+        add(b.v_proj_bias);
+        add(b.o_proj_weight);
+        add(b.q_norm_weight);
+        add(b.k_norm_weight);
+        add(b.gate_proj_weight);
+        add(b.up_proj_weight);
+        add(b.down_proj_weight);
     }
     return params;
 }

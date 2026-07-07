@@ -232,6 +232,30 @@ void validate_dpo_logps(const std::vector<float>& policy_chosen_logps,
     }
 }
 
+void validate_kto_logps(const std::vector<float>& policy_logps,
+                        const std::vector<float>& ref_logps,
+                        const std::vector<float>& labels,
+                        float beta,
+                        float desirable_weight,
+                        float undesirable_weight,
+                        const char* name) {
+    const size_t n = policy_logps.size();
+    if (n == 0 || ref_logps.size() != n || labels.size() != n) {
+        throw std::runtime_error(std::string(name) + ": inconsistent batch sizes");
+    }
+    if (!(beta > 0.0f)) {
+        throw std::runtime_error(std::string(name) + ": beta must be positive");
+    }
+    if (!(desirable_weight > 0.0f) || !(undesirable_weight > 0.0f)) {
+        throw std::runtime_error(std::string(name) + ": KTO weights must be positive");
+    }
+    for (float label : labels) {
+        if (label == 0.0f || !std::isfinite(label)) {
+            throw std::runtime_error(std::string(name) + ": labels must be nonzero finite values");
+        }
+    }
+}
+
 std::pair<float, std::pair<std::vector<double>, std::vector<double>>> compute_loss_and_coeffs(
     const std::vector<float>& policy_chosen_logps,
     const std::vector<float>& policy_rejected_logps,
@@ -272,6 +296,45 @@ std::pair<float, std::pair<std::vector<double>, std::vector<double>>> compute_lo
         static_cast<float>(loss_sum * inv_n),
         {std::move(chosen_coeffs), std::move(rejected_coeffs)},
     };
+}
+
+std::pair<float, std::vector<double>> compute_kto_loss_and_coeffs(
+    const std::vector<float>& policy_logps,
+    const std::vector<float>& ref_logps,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight,
+    float undesirable_weight,
+    const char* name) {
+    validate_kto_logps(policy_logps, ref_logps, labels, beta,
+                       desirable_weight, undesirable_weight, name);
+
+    const size_t n = policy_logps.size();
+    const double inv_n = 1.0 / static_cast<double>(n);
+    double logratio_sum = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        logratio_sum += static_cast<double>(policy_logps[i]) -
+                        static_cast<double>(ref_logps[i]);
+    }
+    const double kl_center = std::max(logratio_sum * inv_n, 0.0);
+
+    double loss_sum = 0.0;
+    std::vector<double> coeffs(n, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        const bool desirable = labels[i] > 0.0f;
+        const double weight = desirable ? desirable_weight : undesirable_weight;
+        const double logratio = static_cast<double>(policy_logps[i]) -
+                                static_cast<double>(ref_logps[i]);
+        const double reward = static_cast<double>(beta) * (logratio - kl_center);
+        const double sig = 1.0 / (1.0 + std::exp(desirable ? -reward : reward));
+        loss_sum += weight * (1.0 - sig);
+        const double dloss_dreward = desirable
+            ? -sig * (1.0 - sig)
+            : sig * (1.0 - sig);
+        coeffs[i] = weight * dloss_dreward * static_cast<double>(beta) * inv_n;
+    }
+
+    return {static_cast<float>(loss_sum * inv_n), std::move(coeffs)};
 }
 
 void accumulate_logits_logp_grads(const TensorPtr& grad_logits,
@@ -543,6 +606,85 @@ private:
     std::vector<double> rejected_coeffs_;
 };
 
+class KTOLogitsBackward final : public BackwardFunction {
+public:
+    KTOLogitsBackward(TensorPtr policy_logits,
+                      TensorPtr input_ids,
+                      TensorPtr response_mask,
+                      std::vector<double> coeffs)
+        : policy_logits_(std::move(policy_logits)),
+          input_ids_(std::move(input_ids)),
+          response_mask_(std::move(response_mask)),
+          coeffs_(std::move(coeffs)) {}
+
+    std::vector<TensorPtr> apply(const TensorPtr& grad_output) override {
+        float outer = 1.0f;
+        if (grad_output && grad_output->numel() > 0) {
+            outer = grad_output->data<float>()[0];
+        }
+        std::vector<double> coeffs = coeffs_;
+        for (double& value : coeffs) value *= static_cast<double>(outer);
+
+        TensorPtr grad_logits = policy_logits_->requires_grad()
+            ? zeros(policy_logits_->shape(), kFloat32, kCPU)
+            : nullptr;
+        if (grad_logits) {
+            accumulate_logits_logp_grads(grad_logits, policy_logits_,
+                                         input_ids_, response_mask_, coeffs);
+        }
+        return {grad_logits};
+    }
+
+private:
+    TensorPtr policy_logits_;
+    TensorPtr input_ids_;
+    TensorPtr response_mask_;
+    std::vector<double> coeffs_;
+};
+
+class StreamingKTOBackward final : public BackwardFunction {
+public:
+    StreamingKTOBackward(TensorPtr hidden,
+                         TensorPtr lm_head_weight,
+                         TensorPtr input_ids,
+                         TensorPtr response_mask,
+                         std::vector<double> coeffs)
+        : hidden_(std::move(hidden)),
+          lm_head_weight_(std::move(lm_head_weight)),
+          input_ids_(std::move(input_ids)),
+          response_mask_(std::move(response_mask)),
+          coeffs_(std::move(coeffs)) {}
+
+    std::vector<TensorPtr> apply(const TensorPtr& grad_output) override {
+        float outer = 1.0f;
+        if (grad_output && grad_output->numel() > 0) {
+            outer = grad_output->data<float>()[0];
+        }
+        std::vector<double> coeffs = coeffs_;
+        for (double& value : coeffs) value *= static_cast<double>(outer);
+
+        TensorPtr grad_hidden = hidden_->requires_grad()
+            ? zeros(hidden_->shape(), kFloat32, kCPU)
+            : nullptr;
+        TensorPtr grad_weight = lm_head_weight_->requires_grad()
+            ? zeros(lm_head_weight_->shape(), kFloat32, kCPU)
+            : nullptr;
+        if (grad_hidden || grad_weight) {
+            accumulate_hidden_logp_grads(grad_hidden, grad_weight,
+                                         hidden_, lm_head_weight_,
+                                         input_ids_, response_mask_, coeffs);
+        }
+        return {grad_hidden, grad_weight, nullptr, nullptr};
+    }
+
+private:
+    TensorPtr hidden_;
+    TensorPtr lm_head_weight_;
+    TensorPtr input_ids_;
+    TensorPtr response_mask_;
+    std::vector<double> coeffs_;
+};
+
 TensorPtr make_dense_dpo_loss_from_logps(const TensorPtr& policy_chosen_logits,
                                          const TensorPtr& policy_rejected_logits,
                                          const std::vector<float>& policy_chosen_logps,
@@ -574,6 +716,38 @@ TensorPtr make_dense_dpo_loss_from_logps(const TensorPtr& policy_chosen_logits,
             auto grads = backward_fn->apply(grad_output);
             if (policy_chosen_logits->requires_grad() && grads[0]) accumulate_gradient(policy_chosen_logits, grads[0]);
             if (policy_rejected_logits->requires_grad() && grads[1]) accumulate_gradient(policy_rejected_logits, grads[1]);
+            return grads;
+        });
+#endif
+    }
+    return out;
+}
+
+TensorPtr make_dense_kto_loss_from_logps(const TensorPtr& policy_logits,
+                                         const std::vector<float>& policy_logps,
+                                         const std::vector<float>& ref_logps,
+                                         const TensorPtr& input_ids,
+                                         const TensorPtr& response_mask,
+                                         const std::vector<float>& labels,
+                                         float beta,
+                                         float desirable_weight,
+                                         float undesirable_weight,
+                                         const char* name) {
+    auto computed = compute_kto_loss_and_coeffs(policy_logps, ref_logps, labels,
+                                                beta, desirable_weight,
+                                                undesirable_weight, name);
+    auto out = full({1}, computed.first, kFloat32, kCPU);
+    if (policy_logits->requires_grad()) {
+        out->set_requires_grad(true);
+        auto backward_fn = std::make_shared<KTOLogitsBackward>(
+            policy_logits, input_ids, response_mask, std::move(computed.second));
+#ifdef USE_NEW_AUTOGRAD_ENGINE
+        autograd::Engine::instance().register_node(out, {policy_logits}, backward_fn);
+#else
+        out->set_grad_fn([backward_fn, policy_logits](const TensorPtr& grad_output)
+                             -> std::vector<TensorPtr> {
+            auto grads = backward_fn->apply(grad_output);
+            if (policy_logits->requires_grad() && grads[0]) accumulate_gradient(policy_logits, grads[0]);
             return grads;
         });
 #endif
@@ -693,6 +867,56 @@ TensorPtr streaming_dpo_loss_with_ref_logps(const TensorPtr& chosen_hidden,
     return out;
 }
 
+TensorPtr kto_loss_with_ref_logps(const TensorPtr& policy_logits,
+                                  const std::vector<float>& ref_logps,
+                                  const TensorPtr& input_ids,
+                                  const TensorPtr& response_mask,
+                                  const std::vector<float>& labels,
+                                  float beta,
+                                  float desirable_weight,
+                                  float undesirable_weight) {
+    auto policy_logps = sequence_logprob_masked(policy_logits, input_ids, response_mask);
+    return make_dense_kto_loss_from_logps(
+        policy_logits, policy_logps, ref_logps, input_ids, response_mask, labels,
+        beta, desirable_weight, undesirable_weight, "kto_loss_with_ref_logps");
+}
+
+TensorPtr streaming_kto_loss_with_ref_logps(const TensorPtr& hidden,
+                                            const TensorPtr& lm_head_weight,
+                                            const std::vector<float>& ref_logps,
+                                            const TensorPtr& input_ids,
+                                            const TensorPtr& response_mask,
+                                            const std::vector<float>& labels,
+                                            float beta,
+                                            float desirable_weight,
+                                            float undesirable_weight) {
+    auto policy_logps =
+        sequence_logprob_masked_from_hidden(hidden, lm_head_weight, input_ids, response_mask);
+    auto computed = compute_kto_loss_and_coeffs(policy_logps, ref_logps, labels,
+                                                beta, desirable_weight,
+                                                undesirable_weight,
+                                                "streaming_kto_loss_with_ref_logps");
+    auto out = full({1}, computed.first, kFloat32, kCPU);
+    if (hidden->requires_grad() || lm_head_weight->requires_grad()) {
+        out->set_requires_grad(true);
+        auto backward_fn = std::make_shared<StreamingKTOBackward>(
+            hidden, lm_head_weight, input_ids, response_mask, std::move(computed.second));
+#ifdef USE_NEW_AUTOGRAD_ENGINE
+        autograd::Engine::instance().register_node(
+            out, {hidden, lm_head_weight, input_ids, response_mask}, backward_fn);
+#else
+        out->set_grad_fn([backward_fn, hidden, lm_head_weight](const TensorPtr& grad_output)
+                             -> std::vector<TensorPtr> {
+            auto grads = backward_fn->apply(grad_output);
+            if (hidden->requires_grad() && grads[0]) accumulate_gradient(hidden, grads[0]);
+            if (lm_head_weight->requires_grad() && grads[1]) accumulate_gradient(lm_head_weight, grads[1]);
+            return grads;
+        });
+#endif
+    }
+    return out;
+}
+
 DPOMetrics compute_dpo_metrics_from_logps(const std::vector<float>& policy_chosen_logps,
                                           const std::vector<float>& policy_rejected_logps,
                                           const std::vector<float>& ref_chosen_logps,
@@ -736,6 +960,65 @@ DPOMetrics compute_dpo_metrics_from_logps(const std::vector<float>& policy_chose
     metrics.chosen_reward = static_cast<float>(chosen_reward_sum * inv_n);
     metrics.rejected_reward = static_cast<float>(rejected_reward_sum * inv_n);
     metrics.reward_margin = static_cast<float>(reward_margin_sum * inv_n);
+    metrics.reward_accuracy = static_cast<float>(reward_accuracy_sum * inv_n);
+    return metrics;
+}
+
+DPOMetrics compute_kto_metrics_from_logps(const std::vector<float>& policy_logps,
+                                          const std::vector<float>& ref_logps,
+                                          const std::vector<float>& labels,
+                                          float beta,
+                                          float desirable_weight,
+                                          float undesirable_weight) {
+    validate_kto_logps(policy_logps, ref_logps, labels, beta,
+                       desirable_weight, undesirable_weight,
+                       "compute_kto_metrics_from_logps");
+
+    const size_t n = policy_logps.size();
+    const double inv_n = 1.0 / static_cast<double>(n);
+    double logratio_sum = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        logratio_sum += static_cast<double>(policy_logps[i]) -
+                        static_cast<double>(ref_logps[i]);
+    }
+    const double kl_center = std::max(logratio_sum * inv_n, 0.0);
+
+    DPOMetrics metrics;
+    double loss_sum = 0.0;
+    double desirable_reward_sum = 0.0;
+    double undesirable_reward_sum = 0.0;
+    double reward_accuracy_sum = 0.0;
+    size_t desirable_count = 0;
+    size_t undesirable_count = 0;
+
+    for (size_t i = 0; i < n; ++i) {
+        const bool desirable = labels[i] > 0.0f;
+        const double weight = desirable ? desirable_weight : undesirable_weight;
+        const double logratio = static_cast<double>(policy_logps[i]) -
+                                static_cast<double>(ref_logps[i]);
+        const double reward = static_cast<double>(beta) * (logratio - kl_center);
+        const double sig = 1.0 / (1.0 + std::exp(desirable ? -reward : reward));
+        loss_sum += weight * (1.0 - sig);
+        reward_accuracy_sum += (static_cast<double>(labels[i]) * reward) > 0.0 ? 1.0 : 0.0;
+        if (desirable) {
+            desirable_reward_sum += reward;
+            ++desirable_count;
+        } else {
+            undesirable_reward_sum += reward;
+            ++undesirable_count;
+        }
+    }
+
+    const double desirable_reward = desirable_count > 0
+        ? desirable_reward_sum / static_cast<double>(desirable_count)
+        : 0.0;
+    const double undesirable_reward = undesirable_count > 0
+        ? undesirable_reward_sum / static_cast<double>(undesirable_count)
+        : 0.0;
+    metrics.loss = static_cast<float>(loss_sum * inv_n);
+    metrics.chosen_reward = static_cast<float>(desirable_reward);
+    metrics.rejected_reward = static_cast<float>(undesirable_reward);
+    metrics.reward_margin = static_cast<float>(desirable_reward - undesirable_reward);
     metrics.reward_accuracy = static_cast<float>(reward_accuracy_sum * inv_n);
     return metrics;
 }
@@ -794,6 +1077,25 @@ DPOMetrics compute_dpo_metrics_from_policy_hidden_and_ref_logps(
         ref_chosen_logps,
         ref_rejected_logps,
         beta);
+}
+
+DPOMetrics compute_kto_metrics_from_policy_hidden_and_ref_logps(
+    const TensorPtr& hidden,
+    const TensorPtr& lm_head_weight,
+    const std::vector<float>& ref_logps,
+    const TensorPtr& input_ids,
+    const TensorPtr& response_mask,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight,
+    float undesirable_weight) {
+    return compute_kto_metrics_from_logps(
+        sequence_logprob_masked_from_hidden(hidden, lm_head_weight, input_ids, response_mask),
+        ref_logps,
+        labels,
+        beta,
+        desirable_weight,
+        undesirable_weight);
 }
 
 }  // namespace ops

@@ -139,6 +139,8 @@ set(FINETUNE_SOURCES
     finetune_ops/optim/trainer.cpp
     finetune_ops/optim/auto_trainer.cpp
     finetune_ops/optim/dpo_trainer.cpp
+    finetune_ops/optim/kto_trainer.cpp
+    finetune_ops/optim/preference_scoring.cpp
     
     # Stage C: LoRA save/load
     finetune_ops/graph/lora_saver.cpp
@@ -270,6 +272,8 @@ install(FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/adam.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/auto_trainer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/dpo_trainer.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/kto_trainer.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/preference_scoring.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/gemma_trainer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/optimizer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/trainer.h
@@ -502,6 +506,14 @@ if(BUILD_TESTS)
         )
         target_link_libraries(test_dpo_trainer operators)
         add_test(NAME DPOTrainer COMMAND test_dpo_trainer)
+    endif()
+
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/optim/test_kto_trainer.cpp)
+        add_executable(test_kto_trainer
+            finetune_ops/optim/test_kto_trainer.cpp
+        )
+        target_link_libraries(test_kto_trainer operators)
+        add_test(NAME KTOTrainer COMMAND test_kto_trainer)
     endif()
 
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/finetune_ops/graph/test_gemma_lora_roundtrip.cpp)
