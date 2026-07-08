@@ -1,0 +1,6 @@
+[Train] epoch 1/0 | step 199/2251 (global 199/200) | lr 0.000100 | loss 3.1500 | ppl 23.34 | grad_norm 0.900 | tokens 1024
+[Train] epoch 1/0 | step 200/2251 (global 200/200) | lr 0.000100 | loss 3.1380 | ppl 23.06 | grad_norm 0.875 | tokens 1024
+Training completed
+total steps: 200
+total tokens: 204800
+final ema loss: 3.1380

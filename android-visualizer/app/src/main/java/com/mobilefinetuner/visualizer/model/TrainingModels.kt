@@ -43,6 +43,9 @@ enum class RunnerStatus {
 data class StepMetric(
     val step: Int,
     val totalSteps: Int? = null,
+    val trainSamples: Int? = null,
+    val feedbackPairs: Int? = null,
+    val sampleCount: Int? = null,
     val loss: Double? = null,
     val ppl: Double? = null,
     val lr: Double? = null,
@@ -153,7 +156,8 @@ data class NativeDemoConfig(
     val evalInterval: Int = 4,
     val evalBatches: Int = 1,
     val cacheRefLogps: Boolean = false,
-    val dpoPairForward: Boolean = false
+    val dpoPairForward: Boolean = false,
+    val globalAdapterPath: String? = null
 )
 
 data class NativeDemoRunnerState(
@@ -175,9 +179,9 @@ enum class NativeFeedbackMode {
 
 data class NativeInferenceState(
     val modelDir: String = "/data/local/tmp/mft_qwen3",
-    val useFedCampusBridge: Boolean = false,
+    val useMobileRLHFBridge: Boolean = false,
     val bridgeUrl: String = "http://10.0.2.2:8765",
-    val prompt: String = "How is my activity level today?",
+    val prompt: String = "Wearable summary: 6,200 steps, 6h 10m sleep, normal resting heart rate, and slightly low energy. What is one safe activity recommendation for today?",
     val referenceDate: String = "2026-06-25",
     val maxNewTokens: Int = 72,
     val temperature: Double = 0.2,

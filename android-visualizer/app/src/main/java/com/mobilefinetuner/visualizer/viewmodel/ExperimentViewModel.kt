@@ -10,7 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobilefinetuner.sdk.MobileFineTuner
 import com.mobilefinetuner.visualizer.data.FeedbackJsonl
-import com.mobilefinetuner.visualizer.data.FedCampusBridgeClient
+import com.mobilefinetuner.visualizer.data.MobileRLHFBridgeClient
 import com.mobilefinetuner.visualizer.data.NativeDemoCommandBuilder
 import com.mobilefinetuner.visualizer.data.NativeKtoMetrics
 import com.mobilefinetuner.visualizer.data.TrainingLogParser
@@ -49,6 +49,40 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+enum class NativePromptVariant {
+    SINGLE,
+    PAIR_A,
+    PAIR_B
+}
+
+fun sanitizeNativeInferenceText(raw: String): String {
+    return raw
+        .replace(Regex("<\\|[^>]+\\|>"), " ")
+        .replace(Regex("</?s>"), " ")
+        .replace(Regex("(?i)\\b(assistant|user|system)\\s*:"), " ")
+        .replace(Regex("[ \\t\\x0B\\f\\r]+"), " ")
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
+}
+
+fun buildNativeHealthPrompt(
+    userPrompt: String,
+    variant: NativePromptVariant
+): String {
+    val style = when (variant) {
+        NativePromptVariant.SINGLE -> "Give the best direct recommendation."
+        NativePromptVariant.PAIR_A -> "Give a cautious recovery-focused recommendation."
+        NativePromptVariant.PAIR_B -> "Give a more active recommendation, but keep it safe and realistic."
+    }
+    return """
+        You are MobileRLHF, a concise health coaching assistant.
+        User context/question: ${userPrompt.trim()}
+        $style
+        Answer in 1-2 sentences with one specific action and one brief reason.
+        Do not include chat template tokens, role labels, markdown bullets, or meta commentary.
+    """.trimIndent()
+}
+
 class ExperimentViewModel(application: Application) : AndroidViewModel(application) {
 
     private data class PreferenceRow(
@@ -78,6 +112,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
 
     init {
         refreshLocalModels()
+        loadLatestNativeFileRunIfAvailable()
         val rawUri = prefs.getString(KEY_LAST_ROOT_URI, null)
         if (!rawUri.isNullOrBlank()) {
             val uri = Uri.parse(rawUri)
@@ -85,6 +120,32 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             scanRuns(uri)
         }
         refreshNativeDemoCommandPreview()
+    }
+
+    private fun loadLatestNativeFileRunIfAvailable() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (_uiState.value.selectedRunId != null) return@launch
+            val runsRoot = File(getApplication<Application>().filesDir, "mft_runs")
+            val latestRun = runsRoot
+                .listFiles()
+                ?.filter { it.isDirectory && File(it, "train.log").exists() }
+                ?.maxByOrNull { dir ->
+                    listOf("report.json", "metrics.ndjson", "train.log")
+                        .map { File(dir, it) }
+                        .filter { it.exists() }
+                        .maxOfOrNull { it.lastModified() }
+                        ?: dir.lastModified()
+                }
+                ?: return@launch
+            val handle = runHandleForFileRun(latestRun.name, latestRun)
+            _uiState.value = _uiState.value.copy(
+                runHandles = listOf(handle) + _uiState.value.runHandles.filterNot { it.id == handle.id },
+                selectedRunId = handle.id,
+                isLoading = false,
+                error = null
+            )
+            startPolling()
+        }
     }
 
     fun refreshLocalModels() {
@@ -493,7 +554,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     fun runNativeInference() {
         if (nativeInferenceJob?.isActive == true) return
         val request = _uiState.value.nativeInference
-        if (!request.useFedCampusBridge && request.modelDir.isBlank()) {
+        if (!request.useMobileRLHFBridge && request.modelDir.isBlank()) {
             _uiState.value = _uiState.value.copy(
                 nativeInference = request.copy(error = "Model directory is required.")
             )
@@ -530,11 +591,12 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             val startNs = System.nanoTime()
             var loadMs = 0.0
             var generateMs = 0.0
+            val generationPrompt = buildNativeHealthPrompt(request.prompt, NativePromptVariant.SINGLE)
             val result = runCatching {
-                if (request.useFedCampusBridge) {
-                    updateNativeInferenceProgress("Calling FedCampus bridge at ${request.bridgeUrl}.")
+                if (request.useMobileRLHFBridge) {
+                    updateNativeInferenceProgress("Calling MobileRLHF bridge at ${request.bridgeUrl}.")
                     val bridgeStartNs = System.nanoTime()
-                    FedCampusBridgeClient.ask(
+                    MobileRLHFBridgeClient.ask(
                         baseUrl = request.bridgeUrl,
                         query = request.prompt,
                         referenceDate = request.referenceDate
@@ -562,7 +624,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     val generateStartNs = System.nanoTime()
                     updateNativeInferenceProgress("Generating response 1/1 (${request.maxNewTokens} token max).")
                     session.generate(
-                        request.prompt,
+                        generationPrompt,
                         request.maxNewTokens,
                         request.temperature.toFloat(),
                         request.topP.toFloat(),
@@ -583,11 +645,12 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             } else {
                 "Single generation failed: ${failure?.message ?: failure?.javaClass?.simpleName}."
             }
+            val cleanOutput = result.getOrNull()?.let(::sanitizeNativeInferenceText)
             _uiState.value = _uiState.value.copy(
                 nativeInference = current.copy(
                     isRunning = false,
-                    modelLoaded = !request.useFedCampusBridge && nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
-                    output = result.getOrNull(),
+                    modelLoaded = !request.useMobileRLHFBridge && nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
+                    output = cleanOutput,
                     candidateA = null,
                     candidateB = null,
                     elapsedMs = elapsedMs.takeIf { result.isSuccess },
@@ -605,7 +668,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     fun runNativeInferencePair() {
         if (nativeInferenceJob?.isActive == true) return
         val request = _uiState.value.nativeInference
-        if (!request.useFedCampusBridge && request.modelDir.isBlank()) {
+        if (!request.useMobileRLHFBridge && request.modelDir.isBlank()) {
             _uiState.value = _uiState.value.copy(
                 nativeInference = request.copy(error = "Model directory is required.")
             )
@@ -644,11 +707,13 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             var generateMs = 0.0
             var candidateAMs = 0.0
             var candidateBMs = 0.0
+            val promptA = buildNativeHealthPrompt(request.prompt, NativePromptVariant.PAIR_A)
+            val promptB = buildNativeHealthPrompt(request.prompt, NativePromptVariant.PAIR_B)
             val result = runCatching {
-                if (request.useFedCampusBridge) {
-                    updateNativeInferenceProgress("Calling FedCampus bridge A/B at ${request.bridgeUrl}.")
+                if (request.useMobileRLHFBridge) {
+                    updateNativeInferenceProgress("Calling MobileRLHF bridge A/B at ${request.bridgeUrl}.")
                     val pairStartNs = System.nanoTime()
-                    FedCampusBridgeClient.askPair(
+                    MobileRLHFBridgeClient.askPair(
                         baseUrl = request.bridgeUrl,
                         query = request.prompt,
                         referenceDate = request.referenceDate
@@ -679,7 +744,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     updateNativeInferenceProgress("Generating candidate A (${request.maxNewTokens} token max).")
                     val candidateAStartNs = System.nanoTime()
                     val a = session.generate(
-                        request.prompt,
+                        promptA,
                         request.maxNewTokens,
                         request.temperature.toFloat(),
                         request.topP.toFloat(),
@@ -691,7 +756,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     )
                     val candidateBStartNs = System.nanoTime()
                     val b = session.generate(
-                        request.prompt,
+                        promptB,
                         request.maxNewTokens,
                         request.temperature.toFloat(),
                         request.topP.toFloat(),
@@ -711,7 +776,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             if (failure != null) {
                 closeNativeInferenceSession()
             }
-            val pair = result.getOrNull()
+            val pair = result.getOrNull()?.let { sanitizeNativeInferenceText(it.first) to sanitizeNativeInferenceText(it.second) }
             val finalMessage = if (result.isSuccess) {
                 "A/B generated in ${formatDemoValue("%.1f", elapsedMs)} ms (A ${formatDemoValue("%.1f", candidateAMs)} ms, B ${formatDemoValue("%.1f", candidateBMs)} ms). Choose A or B."
             } else {
@@ -720,7 +785,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.value = _uiState.value.copy(
                 nativeInference = current.copy(
                     isRunning = false,
-                    modelLoaded = !request.useFedCampusBridge && nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
+                    modelLoaded = !request.useMobileRLHFBridge && nativeInferenceSession != null && nativeInferenceModelDir == request.modelDir,
                     output = null,
                     candidateA = pair?.first,
                     candidateB = pair?.second,
@@ -941,28 +1006,36 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             val root = app.filesDir
             val inferenceFeedbackFile = inferenceFeedbackJsonlFile()
             val useInferenceFeedback = inferenceFeedbackFile.exists() && inferenceFeedbackFile.length() > 0L
-            val runPrefix = if (useInferenceFeedback) "phone_qwen_feedback_kto" else "phone_hf_fitness"
+            val objective = if (config.dpoPairForward) "dpo" else "kto"
+            val objectiveLabel = objective.uppercase(Locale.US)
+            val runPrefix = if (useInferenceFeedback) {
+                "phone_qwen_feedback_$objective"
+            } else {
+                "phone_fedrl_health_$objective"
+            }
             val runName = "${runPrefix}_${config.steps}s_${timestampSuffix()}"
             val runDir = File(root, "mft_runs/$runName")
             val trainFile = if (useInferenceFeedback) {
                 File(runDir, "inference_feedback.jsonl")
             } else {
-                File(root, "mft_demo_data/hf_fitness_pref_train.jsonl")
+                File(root, "mft_demo_data/fedrl_health_dpo_train.jsonl")
             }
-            val evalFile = File(root, "mft_demo_data/hf_fitness_pref_eval.jsonl")
+            val evalFile = File(root, "mft_demo_data/fedrl_health_dpo_eval.jsonl")
 
             try {
                 nativeDemoStopRequested = false
                 nativeDemoRunDir = runDir
                 runDir.mkdirs()
                 if (useInferenceFeedback) {
-                    writeFitnessPreferenceData(File(root, "mft_demo_data/hf_fitness_pref_train.jsonl"), evalFile)
+                    writeFedRlPreferenceData(File(root, "mft_demo_data/fedrl_health_dpo_train.jsonl"), evalFile)
                     inferenceFeedbackFile.copyTo(trainFile, overwrite = true)
                 } else {
-                    writeFitnessPreferenceData(trainFile, evalFile)
+                    writeFedRlPreferenceData(trainFile, evalFile)
                 }
                 val pairCount = countJsonlLines(trainFile)
-                val useBridgeKto = useInferenceFeedback && _uiState.value.nativeInference.useFedCampusBridge
+                val useBridgeKto = useInferenceFeedback &&
+                    !config.dpoPairForward &&
+                    _uiState.value.nativeInference.useMobileRLHFBridge
 
                 if (useBridgeKto) {
                     val handle = runHandleForFileRun(runName, runDir)
@@ -976,6 +1049,8 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                         runHandles = runs,
                         selectedRunId = handle.id,
                         compareRunId = _uiState.value.compareRunId?.takeIf { it != handle.id },
+                        snapshot = null,
+                        compareSnapshot = null,
                         nativeDemoRunner = NativeDemoRunnerState(
                             status = NativeDemoRunStatus.RUNNING,
                             currentRunName = runName,
@@ -984,13 +1059,13 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                             trainingSourceLabel = "Qwen feedback KTO bridge",
                             trainingJsonlPath = trainFile.absolutePath,
                             trainingPairCount = pairCount,
-                            message = "Training Qwen3-0.6B KTO through the FedCampus bridge."
+                            message = "Training Qwen3-0.6B KTO through the MobileRLHF bridge."
                         ),
                         error = null
                     )
                     startPolling()
 
-                    val response = FedCampusBridgeClient.trainKto(
+                    val response = MobileRLHFBridgeClient.trainKto(
                         baseUrl = bridgeUrl,
                         preferenceJsonl = trainFile.readText(),
                         maxSteps = config.steps,
@@ -1034,113 +1109,66 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     return@launch
                 }
 
-                if (useInferenceFeedback) {
-                    val handle = runHandleForFileRun(runName, runDir)
-                    val runs = listOf(handle) + _uiState.value.runHandles.filterNot { it.id == handle.id }
-                    val modelDir = _uiState.value.nativeInference.modelDir
-                    val commandPreview = "MobileFineTuner.open(${NativeDemoCommandBuilder.shellQuote(modelDir)}) " +
-                        "native_kto steps=${config.steps} batch=${nativeKtoBatchSize(config)} seq_len=${config.seqLen}"
-
-                    _uiState.value = _uiState.value.copy(
-                        activeTab = DashboardTab.EXPERIMENTS,
-                        runHandles = runs,
-                        selectedRunId = handle.id,
-                        compareRunId = _uiState.value.compareRunId?.takeIf { it != handle.id },
-                        nativeDemoRunner = NativeDemoRunnerState(
-                            status = NativeDemoRunStatus.RUNNING,
-                            currentRunName = runName,
-                            currentRunPath = runDir.absolutePath,
-                            commandPreview = commandPreview,
-                            trainingSourceLabel = "Qwen feedback native KTO",
-                            trainingJsonlPath = trainFile.absolutePath,
-                            trainingPairCount = pairCount,
-                            message = "Training Qwen KTO with the Android native C++ SDK."
-                        ),
-                        error = null
-                    )
-                    startPolling()
-
-                    val status = runNativeKtoTraining(
-                        modelDir = modelDir,
-                        trainFile = trainFile,
-                        runDir = runDir,
-                        config = config,
-                        commandPreview = commandPreview
-                    )
-
-                    _uiState.value = _uiState.value.copy(
-                        nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
-                            status = status,
-                            lastExitCode = if (status == NativeDemoRunStatus.COMPLETED) 0 else 1,
-                            message = if (status == NativeDemoRunStatus.COMPLETED) {
-                                "Native C++ KTO completed on Android."
-                            } else {
-                                "Native C++ KTO failed; check train.log."
-                            }
-                        )
-                    )
-                    startPolling()
-                    return@launch
-                }
-
-                val paths = NativeDemoCommandBuilder.Paths(
-                    binaryPath = nativeDemoBinaryPath(app),
-                    trainJsonl = trainFile.absolutePath,
-                    evalJsonl = evalFile.absolutePath,
-                    runDir = runDir.absolutePath,
-                    loraOut = "hf_fitness_adapter_${config.steps}s.safetensors"
-                )
-                val command = NativeDemoCommandBuilder.buildShellCommand(config, paths)
                 val handle = runHandleForFileRun(runName, runDir)
                 val runs = listOf(handle) + _uiState.value.runHandles.filterNot { it.id == handle.id }
+                val modelDir = _uiState.value.nativeInference.modelDir
+                val commandPreview = "MobileFineTuner.open(${NativeDemoCommandBuilder.shellQuote(modelDir)}) " +
+                    "native_$objective steps=${config.steps} batch=${nativePreferenceBatchSize(config)} seq_len=${config.seqLen}"
 
                 _uiState.value = _uiState.value.copy(
                     activeTab = DashboardTab.EXPERIMENTS,
                     runHandles = runs,
                     selectedRunId = handle.id,
                     compareRunId = _uiState.value.compareRunId?.takeIf { it != handle.id },
+                    snapshot = null,
+                    compareSnapshot = null,
                     nativeDemoRunner = NativeDemoRunnerState(
                         status = NativeDemoRunStatus.RUNNING,
                         currentRunName = runName,
                         currentRunPath = runDir.absolutePath,
-                        commandPreview = command,
+                        commandPreview = commandPreview,
                         trainingSourceLabel = if (useInferenceFeedback) {
-                            "Qwen feedback"
+                            "Qwen feedback native $objectiveLabel"
                         } else {
-                            "HF fitness preference dataset"
+                            "FedRL health native $objectiveLabel"
                         },
                         trainingJsonlPath = trainFile.absolutePath,
                         trainingPairCount = pairCount,
                         message = if (useInferenceFeedback) {
-                            "Training native DPO fallback on saved Qwen A/B feedback."
+                            "Training native $objectiveLabel on saved Qwen A/B feedback."
                         } else {
-                            "Training native DPO on bundled HF fitness preferences."
+                            "Training native $objectiveLabel on bundled FedRL health preferences."
                         }
                     ),
                     error = null
                 )
                 startPolling()
 
-                nativeDemoProcess = ProcessBuilder("/system/bin/sh", "-c", command)
-                    .directory(runDir)
-                    .redirectErrorStream(true)
-                    .start()
-                val exit = nativeDemoProcess?.waitFor() ?: -1
-                nativeDemoProcess = null
-
-                val status = when {
-                    nativeDemoStopRequested -> NativeDemoRunStatus.STOPPED
-                    exit == 0 -> NativeDemoRunStatus.COMPLETED
-                    else -> NativeDemoRunStatus.FAILED
+                val status = if (config.dpoPairForward) {
+                    runNativeDpoTraining(
+                        modelDir = modelDir,
+                        trainFile = trainFile,
+                        runDir = runDir,
+                        config = config,
+                        commandPreview = commandPreview
+                    )
+                } else {
+                    runNativeKtoTraining(
+                        modelDir = modelDir,
+                        trainFile = trainFile,
+                        runDir = runDir,
+                        config = config,
+                        commandPreview = commandPreview
+                    )
                 }
                 _uiState.value = _uiState.value.copy(
                     nativeDemoRunner = _uiState.value.nativeDemoRunner.copy(
                         status = status,
-                        lastExitCode = exit,
+                        lastExitCode = if (status == NativeDemoRunStatus.COMPLETED) 0 else 1,
                         message = when (status) {
                             NativeDemoRunStatus.STOPPED -> "Native demo stopped."
-                            NativeDemoRunStatus.COMPLETED -> "Native demo completed."
-                            else -> "Native demo exited with code $exit."
+                            NativeDemoRunStatus.COMPLETED -> "Native C++ $objectiveLabel completed on Android."
+                            else -> "Native C++ $objectiveLabel failed; check train.log."
                         }
                     )
                 )
@@ -1203,6 +1231,10 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun nativeKtoBatchSize(config: NativeDemoConfig): Int {
+        return nativePreferenceBatchSize(config)
+    }
+
+    private fun nativePreferenceBatchSize(config: NativeDemoConfig): Int {
         return if (config.steps <= 5) 4 else 2
     }
 
@@ -1214,6 +1246,299 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
             undesirableBaseline = "Give unsafe, generic, or irrelevant health advice that ignores the user's context."
         ).map { pair ->
             PreferenceRow(pair.prompt, pair.chosen, pair.rejected)
+        }
+    }
+
+    private fun resolveGlobalAdapterFile(config: NativeDemoConfig): File? {
+        val path = config.globalAdapterPath?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return File(path).takeIf { it.isFile && it.length() > 0L }
+    }
+
+    private fun runNativeDpoTraining(
+        modelDir: String,
+        trainFile: File,
+        runDir: File,
+        config: NativeDemoConfig,
+        commandPreview: String
+    ): NativeDemoRunStatus {
+        val rows = readPreferenceRows(trainFile)
+        val metricsFile = File(runDir, "metrics.ndjson")
+        val reportFile = File(runDir, "report.json")
+        val logFile = File(runDir, "train.log")
+        val referenceLogpsFile = File(runDir, "reference_logps.jsonl")
+        val adapterFile = File(runDir, "qwen_dpo_lora_adapter.jsonl")
+        val generationFile = File(runDir, "before_after_generation.json")
+        val beforeAfterEvalFile = File(runDir, "before_after_eval.json")
+        if (rows.isEmpty()) {
+            logFile.writeText("[Error] No valid preference rows in ${trainFile.absolutePath}\n")
+            return NativeDemoRunStatus.FAILED
+        }
+
+        return try {
+            val batchSize = nativePreferenceBatchSize(config)
+            val startedMs = SystemClock.elapsedRealtime()
+            var loadedGlobalAdapterPath: String? = null
+            logFile.writeText(
+                buildString {
+                    appendLine("[Config] Android native C++ DPO run")
+                    appendLine("[Config] model_dir=$modelDir")
+                    appendLine("[Config] feedback_pairs=${rows.size} steps=${config.steps} batch=$batchSize seq_len=${config.seqLen}")
+                    appendLine("[Config] command=$commandPreview")
+                    appendLine("[Config] reference_logps=base_model_cached")
+                }
+            )
+            metricsFile.writeText("")
+            referenceLogpsFile.writeText("")
+
+            logFile.appendText("[Stage] opening model\n")
+            MobileFineTuner.open(modelDir).use { tuner ->
+                logFile.appendText("[Stage] model opened\n")
+
+                val evalPrompt = rows.first().prompt
+                    .substringAfter("User:", rows.first().prompt)
+                    .substringBefore("\nAssistant:", rows.first().prompt)
+                    .trim()
+                    .ifBlank { rows.first().prompt.take(240) }
+                logFile.appendText("[Stage] before-training inference start\n")
+                val beforeGeneration = runCatching {
+                    tuner.generate(evalPrompt, 8, 0.0f, 1.0f, 7L)
+                }.getOrElse { error ->
+                    "[generation_error] ${error.message ?: error.javaClass.simpleName}"
+                }
+                logFile.appendText("[Stage] before-training inference done\n")
+
+                val cachedRefChosen = FloatArray(rows.size)
+                val cachedRefRejected = FloatArray(rows.size)
+                var cachedValidResponseTokens = 0
+                val evalPairCount = minOf(10, rows.size)
+                logFile.appendText("[Stage] caching base-model reference logps for ${rows.size} preference pairs\n")
+                for (start in rows.indices step batchSize) {
+                    val end = minOf(start + batchSize, rows.size)
+                    val batchRows = rows.subList(start, end)
+                    val scores = tuner.scorePreferenceBatch(
+                        batchRows.map { it.prompt }.toTypedArray(),
+                        batchRows.map { it.chosen }.toTypedArray(),
+                        batchRows.map { it.rejected }.toTypedArray(),
+                        config.seqLen,
+                        true
+                    )
+                    cachedValidResponseTokens += scores.validResponseTokenCount
+                    for (i in batchRows.indices) {
+                        val rowIndex = start + i
+                        cachedRefChosen[rowIndex] = scores.chosenLogps[i]
+                        cachedRefRejected[rowIndex] = scores.rejectedLogps[i]
+                        referenceLogpsFile.appendText(
+                            JSONObject()
+                                .put("index", rowIndex)
+                                .put("ref_chosen_logp", scores.chosenLogps[i])
+                                .put("ref_rejected_logp", scores.rejectedLogps[i])
+                                .toString() + "\n"
+                        )
+                    }
+                    logFile.appendText("[Stage] cached reference logps $end/${rows.size}\n")
+                }
+                val beforeEvalSummary = summarizePreferenceScores(
+                    cachedRefChosen.copyOfRange(0, evalPairCount),
+                    cachedRefRejected.copyOfRange(0, evalPairCount)
+                )
+                logFile.appendText(
+                    "[Eval before] pairs=${beforeEvalSummary.pairCount} " +
+                        "accuracy=${beforeEvalSummary.accuracy} margin=${beforeEvalSummary.meanMargin}\n"
+                )
+
+                logFile.appendText("[Stage] initializing LoRA\n")
+                tuner.initLora(
+                    MobileFineTuner.LoraConfig(
+                        maxOf(2, config.rank),
+                        maxOf(4, config.alpha).toFloat(),
+                        0.0f,
+                        42L,
+                        arrayOf("q_proj", "k_proj", "v_proj", "o_proj")
+                    )
+                )
+                logFile.appendText("[Stage] LoRA initialized\n")
+                val globalAdapterFile = resolveGlobalAdapterFile(config)
+                if (globalAdapterFile != null) {
+                    logFile.appendText("[Stage] loading global LoRA adapter ${globalAdapterFile.absolutePath}\n")
+                    tuner.loadLoraAdapter(globalAdapterFile)
+                    loadedGlobalAdapterPath = globalAdapterFile.absolutePath
+                    logFile.appendText("[Stage] global LoRA adapter loaded\n")
+                } else if (!config.globalAdapterPath.isNullOrBlank()) {
+                    logFile.appendText("[Stage] global LoRA adapter not found at ${config.globalAdapterPath}; starting from base LoRA\n")
+                }
+                logFile.appendText("[Stage] creating DPO trainer\n")
+                tuner.createDpoTrainer(
+                    MobileFineTuner.DpoTrainerConfig(
+                        config.learningRate.toFloat(),
+                        0.0f,
+                        1.0f,
+                        0.1f,
+                        true,
+                        1
+                    )
+                )
+                logFile.appendText("[Stage] DPO trainer ready\n")
+
+                var first: MobileFineTuner.PreferenceStepResult? = null
+                var last: MobileFineTuner.PreferenceStepResult? = null
+                var peakTrainRssMb: Double? = null
+                for (step in 1..config.steps) {
+                    val batchIndices = (0 until batchSize).map { (step - 1 + it) % rows.size }
+                    val batch = batchIndices.map { rows[it] }
+                    val refChosen = FloatArray(batch.size) { cachedRefChosen[batchIndices[it]] }
+                    val refRejected = FloatArray(batch.size) { cachedRefRejected[batchIndices[it]] }
+                    val stepStartMs = SystemClock.elapsedRealtime()
+                    logFile.appendText("[Stage] step $step/${config.steps} start\n")
+                    val result = tuner.trainPreferenceBatch(
+                        batch.map { it.prompt }.toTypedArray(),
+                        batch.map { it.chosen }.toTypedArray(),
+                        batch.map { it.rejected }.toTypedArray(),
+                        refChosen,
+                        refRejected,
+                        config.seqLen,
+                        true
+                    )
+                    val elapsedMs = SystemClock.elapsedRealtime() - stepStartMs
+                    val rssMb = sampleSelfRssMb()
+                    peakTrainRssMb = NativeKtoMetrics.updatePeakRssMb(peakTrainRssMb, rssMb)
+                    if (first == null) {
+                        first = result
+                    }
+                    last = result
+                    val row = NativeKtoMetrics.dpoStepJson(
+                        step = step,
+                        batchSize = batchSize,
+                        trainSamples = rows.size,
+                        feedbackPairs = rows.size,
+                        trainableParams = result.trainableTensorCount,
+                        loss = result.loss,
+                        rewardAccuracy = result.rewardAccuracy,
+                        rewardMargin = result.rewardMargin,
+                        chosenReward = result.chosenReward,
+                        rejectedReward = result.rejectedReward,
+                        pairCount = result.pairCount,
+                        validResponseTokens = result.validResponseTokenCount,
+                        elapsedMs = elapsedMs,
+                        rssMb = rssMb
+                    )
+                    metricsFile.appendText(row.toString() + "\n")
+                    logFile.appendText(
+                        "[step $step/${config.steps}] loss=${result.loss} " +
+                            "reward_acc=${result.rewardAccuracy} reward_margin=${result.rewardMargin} " +
+                            "pairs=${result.pairCount} time_ms=$elapsedMs" +
+                            (rssMb?.let { " rss_mb=${formatDemoValue("%.1f", it)}" } ?: "") +
+                            "\n"
+                    )
+                }
+
+                logFile.appendText("[Stage] saving LoRA adapter to ${adapterFile.absolutePath}\n")
+                tuner.saveLoraAdapter(adapterFile)
+                logFile.appendText("[Stage] loading saved LoRA adapter for device-side round trip\n")
+                tuner.loadLoraAdapter(adapterFile)
+                logFile.appendText("[Stage] after-training inference start\n")
+                val afterGeneration = runCatching {
+                    tuner.generate(evalPrompt, 8, 0.0f, 1.0f, 7L)
+                }.getOrElse { error ->
+                    "[generation_error] ${error.message ?: error.javaClass.simpleName}"
+                }
+                val firstResult = first ?: error("DPO trainer produced no steps")
+                val finalResult = last ?: error("DPO trainer produced no steps")
+                val trendAccuracyDelta = finalResult.rewardAccuracy.toDouble() - firstResult.rewardAccuracy.toDouble()
+                val trendMarginDelta = finalResult.rewardMargin.toDouble() - firstResult.rewardMargin.toDouble()
+                beforeAfterEvalFile.writeText(
+                    JSONObject()
+                        .put("eval_pairs", evalPairCount)
+                        .put("method", "reference_before_plus_training_reward_trend")
+                        .put("reference_before", JSONObject()
+                            .put("accuracy", beforeEvalSummary.accuracy)
+                            .put("mean_margin", beforeEvalSummary.meanMargin)
+                        )
+                        .put("train_reward_trend", JSONObject()
+                            .put("first_step", JSONObject()
+                                .put("accuracy", firstResult.rewardAccuracy)
+                                .put("mean_margin", firstResult.rewardMargin)
+                            )
+                            .put("final_step", JSONObject()
+                                .put("accuracy", finalResult.rewardAccuracy)
+                                .put("mean_margin", finalResult.rewardMargin)
+                            )
+                            .put("delta", JSONObject()
+                                .put("accuracy", trendAccuracyDelta)
+                                .put("mean_margin", trendMarginDelta)
+                            )
+                        )
+                        .toString(2) + "\n"
+                )
+                logFile.appendText(
+                    "[Trend] first_step_acc=${firstResult.rewardAccuracy} final_step_acc=${finalResult.rewardAccuracy} " +
+                        "first_step_margin=${firstResult.rewardMargin} final_step_margin=${finalResult.rewardMargin} " +
+                        "margin_delta=$trendMarginDelta\n"
+                )
+                generationFile.writeText(
+                    JSONObject()
+                        .put("prompt", evalPrompt)
+                        .put("before_training", beforeGeneration)
+                        .put("after_training_loaded_adapter", afterGeneration)
+                        .put("max_new_tokens", 8)
+                        .toString(2) + "\n"
+                )
+
+                val totalMs = SystemClock.elapsedRealtime() - startedMs
+                val report = JSONObject()
+                    .put("status", "ok")
+                    .put("backend", "android_native_cpp")
+                    .put("objective", "dpo")
+                    .put("model_dir", modelDir)
+                    .put("train_samples", rows.size)
+                    .put("feedback_pairs", rows.size)
+                    .put("max_steps", config.steps)
+                    .put("batch_size", batchSize)
+                    .put("beta", 0.1)
+                    .put("lora_rank", maxOf(2, config.rank))
+                    .put("lora_alpha", maxOf(4, config.alpha))
+                    .put("loaded_global_adapter_path", loadedGlobalAdapterPath ?: JSONObject.NULL)
+                    .put("reference_logps_path", referenceLogpsFile.absolutePath)
+                    .put("cached_reference_pairs", rows.size)
+                    .put("cached_reference_valid_response_tokens", cachedValidResponseTokens)
+                    .put("lora_adapter_path", adapterFile.absolutePath)
+                    .put("before_after_generation_path", generationFile.absolutePath)
+                    .put("before_after_eval_path", beforeAfterEvalFile.absolutePath)
+                    .put("before_after_eval_method", "reference_before_plus_training_reward_trend")
+                    .put("eval_pairs", evalPairCount)
+                    .put("eval_accuracy_before", beforeEvalSummary.accuracy)
+                    .put("eval_margin_before", beforeEvalSummary.meanMargin)
+                    .put("max_train_rss_mb", peakTrainRssMb ?: JSONObject.NULL)
+                    .put("trend_accuracy_before", firstResult.rewardAccuracy)
+                    .put("trend_accuracy_after", finalResult.rewardAccuracy)
+                    .put("trend_accuracy_delta", trendAccuracyDelta)
+                    .put("trend_margin_before", firstResult.rewardMargin)
+                    .put("trend_margin_after", finalResult.rewardMargin)
+                    .put("trend_margin_delta", trendMarginDelta)
+                    .put("last_train_metrics", JSONObject()
+                        .put("loss", finalResult.loss)
+                        .put("reward_accuracy", finalResult.rewardAccuracy)
+                        .put("reward_margin", finalResult.rewardMargin)
+                        .put("chosen_reward", finalResult.chosenReward)
+                        .put("rejected_reward", finalResult.rejectedReward)
+                        .put("policy_trainable_params", finalResult.trainableTensorCount)
+                        .put("pair_count", finalResult.pairCount)
+                    )
+                    .put("total_elapsed_ms", totalMs)
+                reportFile.writeText(report.toString(2) + "\n")
+                logFile.appendText("[Complete] Android native C++ DPO completed in ${totalMs}ms.\n")
+            }
+            NativeDemoRunStatus.COMPLETED
+        } catch (t: Throwable) {
+            logFile.appendText("[Error] ${t.message ?: t.javaClass.simpleName}\n")
+            reportFile.writeText(
+                JSONObject()
+                    .put("status", "failed")
+                    .put("backend", "android_native_cpp")
+                    .put("objective", "dpo")
+                    .put("error", t.message ?: t.javaClass.simpleName)
+                    .toString(2) + "\n"
+            )
+            NativeDemoRunStatus.FAILED
         }
     }
 
@@ -1240,6 +1565,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         return try {
             val batchSize = nativeKtoBatchSize(config)
             val startedMs = SystemClock.elapsedRealtime()
+            var loadedGlobalAdapterPath: String? = null
             logFile.writeText(
                 buildString {
                     appendLine("[Config] Android native C++ KTO run")
@@ -1319,6 +1645,15 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 )
                 logFile.appendText("[Stage] LoRA initialized\n")
+                val globalAdapterFile = resolveGlobalAdapterFile(config)
+                if (globalAdapterFile != null) {
+                    logFile.appendText("[Stage] loading global LoRA adapter ${globalAdapterFile.absolutePath}\n")
+                    tuner.loadLoraAdapter(globalAdapterFile)
+                    loadedGlobalAdapterPath = globalAdapterFile.absolutePath
+                    logFile.appendText("[Stage] global LoRA adapter loaded\n")
+                } else if (!config.globalAdapterPath.isNullOrBlank()) {
+                    logFile.appendText("[Stage] global LoRA adapter not found at ${config.globalAdapterPath}; starting from base LoRA\n")
+                }
                 logFile.appendText("[Stage] creating KTO trainer\n")
                 tuner.createKtoTrainer(
                     MobileFineTuner.KtoTrainerConfig(
@@ -1452,6 +1787,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     .put("beta", 0.1)
                     .put("lora_rank", maxOf(2, config.rank))
                     .put("lora_alpha", maxOf(4, config.alpha))
+                    .put("loaded_global_adapter_path", loadedGlobalAdapterPath ?: JSONObject.NULL)
                     .put("reference_logps_path", referenceLogpsFile.absolutePath)
                     .put("cached_reference_pairs", rows.size)
                     .put("cached_reference_valid_response_tokens", cachedValidResponseTokens)
@@ -2066,19 +2402,14 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun buildNativeDemoPreview(config: NativeDemoConfig): String {
-        val app = getApplication<Application>()
-        val root = app.filesDir.absolutePath
-        val trainJsonl = currentNativeDemoTrainingJsonlPath()
-        return NativeDemoCommandBuilder.buildShellCommand(
-            config,
-            NativeDemoCommandBuilder.Paths(
-                binaryPath = nativeDemoBinaryPath(app),
-                trainJsonl = trainJsonl,
-                evalJsonl = "$root/mft_demo_data/hf_fitness_pref_eval.jsonl",
-                runDir = "$root/mft_runs/<new-run>",
-                loraOut = "hf_fitness_adapter_${config.steps}s.safetensors"
-            )
-        )
+        val objective = if (config.dpoPairForward) "dpo" else "kto"
+        val modelDir = _uiState.value.nativeInference.modelDir
+        val globalAdapter = config.globalAdapterPath?.takeIf { it.isNotBlank() }
+            ?.let { " global_adapter=${NativeDemoCommandBuilder.shellQuote(it)}" }
+            ?: ""
+        return "MobileFineTuner.open(${NativeDemoCommandBuilder.shellQuote(modelDir)}) " +
+            "native_$objective steps=${config.steps} batch=${nativePreferenceBatchSize(config)} " +
+            "seq_len=${config.seqLen}$globalAdapter"
     }
 
     private fun currentNativeDemoTrainingJsonlFile(): File {
@@ -2087,7 +2418,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         return if (feedback.exists() && feedback.length() > 0L) {
             feedback
         } else {
-            File(app.filesDir, "mft_demo_data/hf_fitness_pref_train.jsonl")
+            File(app.filesDir, "mft_demo_data/fedrl_health_dpo_train.jsonl")
         }
     }
 
@@ -2100,7 +2431,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         return if (feedback.exists() && feedback.length() > 0L) {
             "Qwen feedback"
         } else {
-            "HF fitness preference dataset"
+            "FedRL health preference dataset"
         }
     }
 
@@ -2127,6 +2458,18 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         }.onFailure {
             trainFile.writeText(BUILT_IN_FITNESS_PREF_TRAIN.joinToString("\n") + "\n")
             evalFile.writeText(BUILT_IN_FITNESS_PREF_EVAL.joinToString("\n") + "\n")
+        }
+    }
+
+    private fun writeFedRlPreferenceData(trainFile: File, evalFile: File) {
+        trainFile.parentFile?.mkdirs()
+        evalFile.parentFile?.mkdirs()
+        val app = getApplication<Application>()
+        runCatching {
+            copyAssetToFile(app, FEDRL_HEALTH_DPO_TRAIN_ASSET, trainFile)
+            copyAssetToFile(app, FEDRL_HEALTH_DPO_EVAL_ASSET, evalFile)
+        }.onFailure {
+            writeFitnessPreferenceData(trainFile, evalFile)
         }
     }
 
@@ -2290,6 +2633,8 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         private const val DPO_START_CURSOR = 8
         private const val FITNESS_PREF_TRAIN_ASSET = "mft_demo_data/hf_fitness_pref_train.jsonl"
         private const val FITNESS_PREF_EVAL_ASSET = "mft_demo_data/hf_fitness_pref_eval.jsonl"
+        private const val FEDRL_HEALTH_DPO_TRAIN_ASSET = "mft_demo_data/fedrl_health_dpo_train.jsonl"
+        private const val FEDRL_HEALTH_DPO_EVAL_ASSET = "mft_demo_data/fedrl_health_dpo_eval.jsonl"
 
         private val DPO_FEEDBACK_PROMPTS = listOf(
             FeedbackPrompt(

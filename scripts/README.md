@@ -21,15 +21,24 @@ scripts/
 │   ├── adb_resource_monitor.sh
 │   ├── android_env.sh
 │   ├── build_qwen_android.sh
+│   ├── clear_global_adapter.sh
+│   ├── collect_fedrl_round.sh
+│   ├── distribute_global_adapter.sh
 │   ├── proc_mem_monitor.cpp
+│   ├── run_fedrl_round_with_monitor.sh
 │   ├── run_qwen_qnli_native_phone.sh
 │   └── stage_qwen_qnli_phone_assets.sh
+├── federated/
+│   ├── aggregate_lora_jsonl.py
+│   ├── run_fedrl_round.sh
+│   └── summarize_fedrl_round.py
 ├── lib/
 │   └── asset_paths.sh
 ├── plot_loss_curve.py
 ├── prepare_arcc_jsonl.py
 ├── prepare_mcq_jsonl.py
 ├── prepare_qa_dpo_jsonl.py
+├── prepare_fedrl_datasets.py
 ├── convert_dpo_to_kto_jsonl.py
 ├── judge_qa_answers.py
 ├── prepare_qnli_jsonl.py
@@ -149,8 +158,8 @@ Each DPO pair becomes two KTO records: the chosen response is written with
 
 ```bash
 python3 scripts/convert_dpo_to_kto_jsonl.py \
-  --input review-stage/data/health_dpo_curated_train.jsonl \
-  --output review-stage/data/health_kto_train.jsonl \
+  --input android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_dpo_train.jsonl \
+  --output android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_kto_train.jsonl \
   --stats runs/kto_health_smoke/convert_train_stats.json
 ```
 
@@ -177,14 +186,51 @@ For direct CLI use, call the maintained Python module:
 python3 -m pytorch_alignment.kto_cli \
   --backend qwen \
   --model_dir examples/qwen_lora_finetune/pretrained \
-  --kto_jsonl review-stage/data/health_kto_train.jsonl \
-  --eval_jsonl review-stage/data/health_kto_eval.jsonl \
+  --kto_jsonl android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_kto_train.jsonl \
+  --eval_jsonl android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_kto_eval.jsonl \
   --out_dir runs/kto_qwen3_0_6b_manual \
   --max_steps 5 \
   --batch_size 4 \
   --seq_len 128 \
   --lora_rank 2 \
   --lora_alpha 4
+```
+
+### `android/run_fedrl_round_with_monitor.sh`
+
+Starts one real federated DPO or KTO round on all adb-connected phones. The
+script starts the Android app by intent, records per-device RSS/time-series
+monitor CSVs, collects the exact private run it started, aggregates LoRA
+adapters with FedAvg, and writes a round summary.
+
+```bash
+export FEDRL_SERIALS="PHONE_A PHONE_B PHONE_C"
+OBJECTIVE=dpo ROUND=001 STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+  scripts/android/run_fedrl_round_with_monitor.sh
+
+OBJECTIVE=kto ROUND=001 STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+  scripts/android/run_fedrl_round_with_monitor.sh
+```
+
+For later rounds:
+
+```bash
+OBJECTIVE=dpo ROUND=002 \
+  PREVIOUS_GLOBAL_ADAPTER="runs/fedrl_round_001_dpo/global_dpo_lora_adapter.jsonl" \
+  scripts/android/run_fedrl_round_with_monitor.sh
+```
+
+### `federated/aggregate_lora_jsonl.py`
+
+Aggregates MobileFineTuner JSONL LoRA adapters. By default, client weights come
+from each adapter's sibling `report.json` field `feedback_pairs`.
+
+```bash
+python3 scripts/federated/aggregate_lora_jsonl.py \
+  --input phone_a/qwen_dpo_lora_adapter.jsonl::24 \
+  --input phone_b/qwen_dpo_lora_adapter.jsonl::24 \
+  --input phone_c/qwen_dpo_lora_adapter.jsonl::24 \
+  --output runs/fedrl_round_001_dpo/global_dpo_lora_adapter.jsonl
 ```
 
 ### `run_training_real_assets.sh`

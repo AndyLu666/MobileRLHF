@@ -87,6 +87,20 @@ class TrainingLogParserTest {
     }
 
     @Test
+    fun parseMetricsNdjsonKeepsKtoSampleCounts() {
+        val metrics = TrainingLogParser.parseMetricsNdjson(
+            listOf(
+                """{"step":10,"train_samples":48,"feedback_pairs":24,"sample_count":4,"loss":0.3949413,"reward_margin":0.88533133}"""
+            )
+        )
+
+        assertThat(metrics).hasSize(1)
+        assertThat(metrics.single().trainSamples).isEqualTo(48)
+        assertThat(metrics.single().feedbackPairs).isEqualTo(24)
+        assertThat(metrics.single().sampleCount).isEqualTo(4)
+    }
+
+    @Test
     fun parseDpoTrainAndEvalLog_extractsHfrlMetrics() {
         val lines = listOf(
             "[Train] epoch 1/0 | step 1/16 (global 1/4) | lr 0.000500 | dpo_loss 0.6931 | grad_norm 1.000000 | nonzero_grad_tensors 24 | resp_tokens 18 | RSS(pre/fwd/bwd/opt/post)=100.0/150.0/170.0/171.0/169.0 MB | step_max=171.0 MB | peak=171.0 MB",

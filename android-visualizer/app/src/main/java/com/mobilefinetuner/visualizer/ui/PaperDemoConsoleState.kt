@@ -8,6 +8,8 @@ import com.mobilefinetuner.visualizer.model.NativeInferenceState
 import com.mobilefinetuner.visualizer.model.RunSnapshot
 import java.util.Locale
 
+const val APP_BRAND_NAME = "MobileRLHF"
+
 enum class DemoWorkflowStatus {
     READY,
     NEEDS_INPUT,
@@ -18,6 +20,7 @@ enum class DemoWorkflowStatus {
 
 enum class PaperModeSection {
     HERO,
+    PAPER_FIGURES,
     WORKFLOW,
     ADVANCED_TOGGLE,
     DATA_CONTROLS,
@@ -25,6 +28,19 @@ enum class PaperModeSection {
     LIVE_EVIDENCE,
     PAPER_EVIDENCE
 }
+
+enum class DemoTopPage {
+    TRAINING,
+    SYSTEM,
+    PAIR_FEEDBACK,
+    SINGLE_FEEDBACK,
+    LOGS
+}
+
+data class DemoTopTabState(
+    val page: DemoTopPage,
+    val label: String
+)
 
 data class DemoWorkflowStepState(
     val label: String,
@@ -105,6 +121,30 @@ data class DemoLiveProgressState(
     val message: String
 )
 
+enum class PaperFigureKind {
+    SYSTEM_MONITOR,
+    SINGLE_RATING,
+    PAIR_CHOICE,
+    TRAINING_CURVES
+}
+
+data class PaperFigureState(
+    val kind: PaperFigureKind,
+    val title: String,
+    val subtitle: String,
+    val prompt: String = "",
+    val answerA: String = "",
+    val answerB: String = "",
+    val selectedAnswer: String? = null,
+    val goodSelected: Boolean = false,
+    val badSelected: Boolean = false,
+    val primaryMetric: String = "",
+    val secondaryMetric: String = "",
+    val lossValues: List<Double> = emptyList(),
+    val rewardMarginValues: List<Double> = emptyList(),
+    val memoryValues: List<Double> = emptyList()
+)
+
 fun displayFeedbackRows(
     inference: NativeInferenceState,
     runner: NativeDemoRunnerState
@@ -115,6 +155,7 @@ fun displayFeedbackRows(
 fun buildPaperModeSections(showAdvanced: Boolean): List<PaperModeSection> {
     val defaultSections = listOf(
         PaperModeSection.HERO,
+        PaperModeSection.PAPER_FIGURES,
         PaperModeSection.WORKFLOW,
         PaperModeSection.ADVANCED_TOGGLE
     )
@@ -126,6 +167,16 @@ fun buildPaperModeSections(showAdvanced: Boolean): List<PaperModeSection> {
         PaperModeSection.TRAINING_CONTROLS,
         PaperModeSection.LIVE_EVIDENCE,
         PaperModeSection.PAPER_EVIDENCE
+    )
+}
+
+fun buildDemoTopTabStates(): List<DemoTopTabState> {
+    return listOf(
+        DemoTopTabState(DemoTopPage.TRAINING, "Train"),
+        DemoTopTabState(DemoTopPage.SYSTEM, "System"),
+        DemoTopTabState(DemoTopPage.PAIR_FEEDBACK, "A/B"),
+        DemoTopTabState(DemoTopPage.SINGLE_FEEDBACK, "Single"),
+        DemoTopTabState(DemoTopPage.LOGS, "Logs")
     )
 }
 
@@ -201,50 +252,74 @@ fun buildPaperRunLabelState(
     )
 }
 
-fun buildDemoPrimaryActionState(runner: NativeDemoRunnerState): DemoPrimaryActionState {
-    return when (runner.status) {
-        NativeDemoRunStatus.RUNNING,
-        NativeDemoRunStatus.STOPPING -> DemoPrimaryActionState(
-            label = "Stop Training",
-            kind = DemoPrimaryActionKind.STOP,
-            enabled = runner.status == NativeDemoRunStatus.RUNNING
-        )
-        NativeDemoRunStatus.COMPLETED -> DemoPrimaryActionState(
+fun buildDemoPrimaryActionState(
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot? = null
+): DemoPrimaryActionState {
+    val completed = runner.status == NativeDemoRunStatus.COMPLETED ||
+        snapshot?.status?.name == "COMPLETED"
+    return when {
+        runner.status == NativeDemoRunStatus.RUNNING ||
+            runner.status == NativeDemoRunStatus.STOPPING -> DemoPrimaryActionState(
+                label = "Stop Training",
+                kind = DemoPrimaryActionKind.STOP,
+                enabled = runner.status == NativeDemoRunStatus.RUNNING
+            )
+        completed -> DemoPrimaryActionState(
             label = "Review Evidence",
             kind = DemoPrimaryActionKind.REVIEW,
             enabled = false
         )
-        else -> if (runner.trainingPairCount > 0) {
-            DemoPrimaryActionState(
-                label = "Start KTO Training",
-                kind = DemoPrimaryActionKind.START,
-                enabled = true
-            )
-        } else {
-            DemoPrimaryActionState(
-                label = "Load DPO/KTO Data",
-                kind = DemoPrimaryActionKind.LOAD_DATA,
-                enabled = true
-            )
-        }
+        runner.trainingPairCount > 0 -> DemoPrimaryActionState(
+            label = "Start KTO Training",
+            kind = DemoPrimaryActionKind.START,
+            enabled = true
+        )
+        else -> DemoPrimaryActionState(
+            label = "Load DPO/KTO Data",
+            kind = DemoPrimaryActionKind.LOAD_DATA,
+            enabled = true
+        )
     }
 }
 
-fun buildDemoChartPreviewState(snapshot: RunSnapshot?): DemoChartPreviewState {
+fun activeRunSnapshotForDemo(
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?
+): RunSnapshot? {
+    val isTraining = runner.status == NativeDemoRunStatus.RUNNING ||
+        runner.status == NativeDemoRunStatus.STOPPING
+    val currentName = runner.currentRunName
+    if (!isTraining || currentName.isNullOrBlank() || snapshot == null) {
+        return snapshot
+    }
+    return snapshot.takeIf { it.runName == currentName }
+}
+
+fun buildDemoChartPreviewState(
+    snapshot: RunSnapshot?,
+    isTraining: Boolean = false
+): DemoChartPreviewState {
     val metrics = snapshot?.metrics.orEmpty()
     val liveLoss = metrics.mapNotNull { it.loss }
     val liveMargin = metrics.mapNotNull { it.rewardMargin }
     val hasLiveCurves = liveLoss.size >= 2 || liveMargin.size >= 2
-    return if (hasLiveCurves) {
-        DemoChartPreviewState(
+    return when {
+        hasLiveCurves -> DemoChartPreviewState(
             title = "Live Training Charts",
             subtitle = "Real Android KTO metrics",
             isLive = true,
             lossValues = liveLoss.ifEmpty { listOf(0.0, 0.0) },
             rewardMarginValues = liveMargin.ifEmpty { listOf(0.0, 0.0) }
         )
-    } else {
-        DemoChartPreviewState(
+        isTraining -> DemoChartPreviewState(
+            title = "Live Training Charts",
+            subtitle = "Waiting for Android metrics",
+            isLive = true,
+            lossValues = emptyList(),
+            rewardMarginValues = emptyList()
+        )
+        else -> DemoChartPreviewState(
             title = "Training Preview",
             subtitle = "Example curves; real values appear after training starts",
             isLive = false,
@@ -289,6 +364,78 @@ fun buildDemoWorkflowSteps(
         DemoWorkflowStepState(
             label = "Evidence",
             status = if (evidenceDone) DemoWorkflowStatus.DONE else DemoWorkflowStatus.NEEDS_INPUT
+        )
+    )
+}
+
+fun buildPaperFigureStates(
+    inference: NativeInferenceState,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?
+): List<PaperFigureState> {
+    val isTraining = runner.status == NativeDemoRunStatus.RUNNING ||
+        runner.status == NativeDemoRunStatus.STOPPING
+    val preview = buildDemoChartPreviewState(snapshot, isTraining = isTraining)
+    val metrics = snapshot?.metrics.orEmpty()
+    val lossValues = metrics.mapNotNull { it.loss }.ifEmpty { preview.lossValues }
+    val rewardMarginValues = metrics.mapNotNull { it.rewardMargin }.ifEmpty { preview.rewardMarginValues }
+    val memoryValues = metrics.mapNotNull { it.rssMb }.ifEmpty {
+        when {
+            isTraining -> emptyList()
+            snapshot?.summary?.maxTrainRssMb != null -> listOf(snapshot.summary.maxTrainRssMb)
+            else -> listOf(4200.0, 4680.0, 5279.3)
+        }
+    }
+    val peakMemory = memoryValues.maxOrNull()
+    val prompt = inference.prompt.ifBlank { "How should I adjust today's health plan?" }
+    val singleAnswer = inference.output
+        ?.takeIf { it.isNotBlank() }
+        ?: "Take a short walk, hydrate, and keep the evening routine light."
+    val answerA = inference.candidateA
+        ?.takeIf { it.isNotBlank() }
+        ?: "Prioritize recovery today: short walk, hydration, and consistent sleep."
+    val answerB = inference.candidateB
+        ?.takeIf { it.isNotBlank() }
+        ?: "Increase intensity despite fatigue and skip the recovery window."
+    val selected = inference.lastChosenLabel ?: "A"
+    val stepCount = snapshot?.summary?.totalSteps
+        ?: metrics.lastOrNull()?.totalSteps
+        ?: if (isTraining) 0 else 10
+    return listOf(
+        PaperFigureState(
+            kind = PaperFigureKind.SYSTEM_MONITOR,
+            title = "System Monitor",
+            subtitle = "Android RSS memory during local KTO",
+            primaryMetric = peakMemory?.let { "${formatDemoMetric(it, digits = 1)} MB" } ?: "RSS pending",
+            secondaryMetric = "Steps $stepCount",
+            memoryValues = memoryValues
+        ),
+        PaperFigureState(
+            kind = PaperFigureKind.SINGLE_RATING,
+            title = "Single Answer Feedback",
+            subtitle = "One response, thumbs up/down",
+            prompt = prompt,
+            answerA = singleAnswer,
+            goodSelected = inference.lastRatingLabel == "UP" || inference.lastRatingLabel == null,
+            badSelected = inference.lastRatingLabel == "DOWN"
+        ),
+        PaperFigureState(
+            kind = PaperFigureKind.PAIR_CHOICE,
+            title = "A/B Preference",
+            subtitle = "One prompt, two answers, choose better",
+            prompt = prompt,
+            answerA = answerA,
+            answerB = answerB,
+            selectedAnswer = selected
+        ),
+        PaperFigureState(
+            kind = PaperFigureKind.TRAINING_CURVES,
+            title = "Loss / Reward",
+            subtitle = if (preview.isLive) "Live Android KTO metrics" else "Preview until training starts",
+            primaryMetric = "Loss ${formatDemoMetric(lossValues.lastOrNull())}",
+            secondaryMetric = "Margin ${formatDemoMetric(rewardMarginValues.lastOrNull())}",
+            lossValues = lossValues,
+            rewardMarginValues = rewardMarginValues
         )
     )
 }

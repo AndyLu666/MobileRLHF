@@ -226,7 +226,7 @@ class FakeAnswerJudge(AnswerJudge):
     source = "fake_answer_judge"
 
     def judge(self, prompt: str, response: str, gold: Optional[str] = None) -> Judgment:
-        bad_markers = ("wrong", "incorrect", "方", "false")
+        bad_markers = ("wrong", "incorrect", "square", "false")
         is_correct = not any(marker in response.casefold() for marker in bad_markers)
         return Judgment(is_correct=is_correct, confidence=0.5, reason="fake deterministic label", source=self.source)
 

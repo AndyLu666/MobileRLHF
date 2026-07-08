@@ -1,747 +1,177 @@
-# MobileFineTuner
+# MobileRLHF
 
-**A C++ Framework for Mobile-Native LLM Fine-Tuning**
+MobileRLHF is a real-device federated preference post-training stack for
+MobileFineTuner. The current maintained path runs DPO and KTO LoRA training on
+Android phones, collects only local adapter updates and run metadata, and
+aggregates adapters with FedAvg on the host.
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-C%2B%2B%20Core%20%7C%20Android%20Native-green.svg)]()
-[![C++](https://img.shields.io/badge/C%2B%2B-17-orange.svg)]()
+## What Is Included
 
-<img width="1508" height="916" alt="overview-git" src="https://github.com/user-attachments/assets/1043765f-5841-4317-b3f3-beaeefee2c4d" />
+| Path | Purpose |
+| --- | --- |
+| `android-visualizer/` | Android app, SDK module, JNI bridge, and phone-side DPO/KTO runner. |
+| `operator/` | Native C++ training core used by the Android SDK. |
+| `scripts/android/` | adb automation for installing, starting, monitoring, collecting, and distributing adapters. |
+| `scripts/federated/` | FedAvg aggregation and round summarization. |
+| `scripts/prepare_fedrl_datasets.py` | Validates DPO data and regenerates KTO JSONL assets. |
+| `android-visualizer/app/src/main/assets/mft_demo_data/` | Small tracked DPO/KTO JSONL assets for clean-clone demos. |
+| `docs/FEDERATED_DPO_KTO_PHONE_RUNBOOK.md` | Full phone runbook. |
+| `docs/FEDERATED_DPO_KTO_DATA_DESIGN.md` | Dataset, model, parameter, and artifact schema. |
 
-<img width="1992" height="1112" alt="image" src="https://github.com/user-attachments/assets/35cb5c4e-a3bb-4a21-aac2-d38d50899a17" />
+Generated outputs are intentionally not tracked. Local runs go under `runs/`,
+which is ignored by Git.
 
-https://github.com/user-attachments/assets/6ba63485-34ba-42b6-b9b1-ff980717c77b
+## DPO and KTO
 
-## 论文
+MobileRLHF supports two preference objectives on device:
 
-论文已发布在 arXiv：
+| Objective | Android native trainer | Input view | Output adapter |
+| --- | --- | --- | --- |
+| DPO | `createDpoTrainer()` + `trainPreferenceBatch()` | `prompt/chosen/rejected` pairs | `qwen_dpo_lora_adapter.jsonl` |
+| KTO | `createKtoTrainer()` + `trainKtoPreferenceBatch()` | binary desirable/undesirable feedback, expanded from pairs when needed | `qwen_kto_lora_adapter.jsonl` |
 
-**MobileFineTuner: A Mobile-Native Framework for On-Device LLM Fine-Tuning in Real-World Embedded AI Applications**  
-Jiaxiang Geng*, Lunyu Zhao*, Yiyi Lu*, and Bing Luo
+Both objectives cache base-model reference log-probs, initialize a LoRA adapter,
+optionally load the previous global LoRA adapter, train locally, then save a
+JSONL LoRA adapter for aggregation.
 
-[![arXiv](https://img.shields.io/badge/arXiv-2512.08211-b31b1b.svg)](https://arxiv.org/abs/2512.08211)
+## Data Assets
 
-如果这个项目对你有帮助，可以引用论文。
-
-## 项目简介
-
-MobileFineTuner 是一个开源框架，目标是在普通手机上直接完成大语言模型微调。训练数据留在本地设备，不依赖桌面端模拟，也不强制依赖 Python 运行时，适合做隐私敏感场景下的个性化模型适配。
-
-MobileFineTuner is an open-source C++ framework for practical, privacy-preserving fine-tuning of Large Language Models (LLMs) on mobile-class devices. The current release candidate verifies the stable C++ core, package/export surface, local training entrypoints, and Android native synthetic smoke execution. Full-weight on-phone training requires externally supplied model weights and device-specific validation.
-
-Unlike simulation-based or desktop-bound approaches, MobileFineTuner is built around a lean native C++ implementation that eliminates Python runtime overhead in the training path and supports both Full Fine-Tuning (Full-FT) and Parameter-Efficient Fine-Tuning (PEFT/LoRA) under tight resource constraints.
-
-### Verified Scope
-
-- Stable C++ operator/autograd/LoRA core with unit tests and installable CMake package.
-- Five local training smoke entrypoints: GPT-2 small, GPT-2 medium, Gemma 270M, Gemma 1B-PT, and Qwen.
-- Android native build/run path validated with a synthetic Qwen LoRA smoke test, including loss/backward/update and 5 ms RSS sampling.
-- Full pretrained weights, benchmark datasets, adapters, run logs, and phone QA media are external runtime artifacts and are not bundled in the source release.
-
-## 主要特性
-
-- **Efficiency**: Pure C++ implementation with modular operators, automatic differentiation, and full backpropagation—no Python runtime or external ML frameworks required
-- **Scalability**: Supports multiple mainstream decoder-only LLM architectures (GPT-2, Gemma, Qwen, and validated experimental Llama 3.x) with reusable graph, tokenizer, dataset, and LoRA components
-- **Usability**: Simple high-level APIs that abstract away system complexity, enabling rapid prototyping and practical deployment
-- **Privacy-Preserving**: All training data remains on-device, complying with GDPR and user privacy expectations
-- **Resource-Aware**: Keeps model weights, datasets, run logs, adapters, and profiling output outside the source package; runtime scripts resolve assets through explicit environment variables
-
-### C++ 部分
-
-- C++17 或更高版本
-- CMake 3.10 及以上
-- pthread
-- 可选 BLAS：macOS 下可用 Accelerate，Linux 下可用 OpenBLAS / MKL
-
-- [Installation & Build](#installation--build)
-- [Quick Start](#quick-start)
-- [Android Training App](#android-training-app)
-- [Android SDK / AAR](#android-sdk--aar)
-- [Model and Dataset Assets](#model-and-dataset-assets)
-- [Supported Models](#supported-models)
-- [Current Family and Task Matrix](docs/CURRENT_FAMILY_TASK_MATRIX.md)
-- [Core Components](#core-components)
-- [Architecture](#architecture)
-- [Evaluation](#evaluation)
-- [Benchmarks](#benchmarks)
-- [Project Structure](#project-structure)
-- [Citation](#citation)
-- [Contributing](#contributing)
-- [License](#license)
-
-- Python 3.10 及以上
-- 若要运行对齐脚本或 Python 测试，需要安装 `torch`、`transformers`、`peft`
-
-推荐使用虚拟环境：
+Prepare or validate the tracked preference assets:
 
 ```bash
-cmake -S operator -B operator/build -DUSE_BLAS=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build operator/build -j4
-ctest --test-dir operator/build --output-on-failure
-cmake --install operator/build --prefix /tmp/mobilefinetuner-install
+python3 scripts/prepare_fedrl_datasets.py
 ```
 
-**Build Outputs:**
-- `liboperators.a` - Core framework library
-- self-contained operator tests such as `test_qkt_softmax_grad`, `test_repeat_kv_softmax_grad`, `test_lora_roundtrip`
+Current bundled assets:
 
-The default `operator/` build produces the reusable library and unit tests.
-Model-specific training/eval CLIs are examples, built from directories under
-`examples/`, such as `examples/gpt2_small_lora_finetune/`,
-`examples/gpt2_medium_lora_finetune/`, `examples/gemma_3_270m_lora_finetune/`,
-`examples/gemma_3_1b_pt_lora_finetune/`, and
-`examples/qwen_lora_finetune/`.
+| Dataset | DPO train/eval | KTO train/eval |
+| --- | ---: | ---: |
+| `fedrl_health` | 24 / 6 pairs | 48 / 12 binary rows |
+| `fedrl_hf_fitness` | 42 / 12 pairs | 84 / 24 binary rows |
 
-The install step exports CMake packages. New downstream projects should use the
-`MobileFineTuner` package name:
+The Android runner uses the DPO-pair JSONL as its runtime input. KTO rounds
+expand those pairs internally before calling the native KTO trainer. The KTO
+JSONL assets are kept as validation/reference data for Python checks and smoke
+runs.
 
-```cmake
-find_package(MobileFineTuner REQUIRED)
-target_link_libraries(your_target PRIVATE MobileFineTuner::operators)
-```
+Phone-collected A/B feedback remains in the app private directory and is used
+instead of the bundled dataset when present.
 
-Use the stable umbrella header in new applications:
+## Phone Setup
 
-```cpp
-#include "mobile_finetuner/mobile_finetuner.h"
-```
-
-See [docs/PUBLIC_API.md](docs/PUBLIC_API.md) for the public API boundary.
-For a consumer-focused setup flow, start with
-[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
-
-The legacy package name is still available for existing consumers:
-`find_package(Operators REQUIRED)` and `Operators::operators`.
-
-### Android Training App
-
-MobileFineTuner includes a user-facing Android app for foreground on-device
-training:
+Build and install the Android app:
 
 ```bash
 cd android-visualizer
 ./gradlew :app:assembleDebug
+cd ..
+
+ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+"$ADB" devices
+"$ADB" -s PHONE_A install -r android-visualizer/app/build/outputs/apk/debug/app-debug.apk
+"$ADB" -s PHONE_B install -r android-visualizer/app/build/outputs/apk/debug/app-debug.apk
+"$ADB" -s PHONE_C install -r android-visualizer/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The app imports HuggingFace-style model directories into app-private storage,
-then runs native SDK training from the `Run` tab. See
-[docs/ANDROID_APP.md](docs/ANDROID_APP.md) for the app workflow and runtime
-asset behavior.
-
-### Android SDK / AAR
-
-MobileFineTuner also provides an Android Library module for app integration:
-
-```bash
-bash scripts/android/build_mft_sdk_aar.sh
-```
-
-This produces `android-visualizer/mft-sdk/build/outputs/aar/mft-sdk-release.aar`.
-The AAR packages the Java API and native JNI bridge, while model weights and
-datasets remain external runtime assets. See [docs/ANDROID_SDK.md](docs/ANDROID_SDK.md)
-for the Android SDK contract.
-
-For consumer-style integration, publish the SDK to a local Maven repository:
-
-```bash
-bash scripts/android/publish_mft_sdk_local.sh
-```
-
-The standalone sample consumer app is available at `android-visualizer/sdk-sample`.
-
-- `operators` 静态库
-- `gpt2_lora_finetune`
-- `gpt2_full_finetune`
-- `train_lora_gemma`
-- `qwen_lora_finetune`
-- 若开启测试，还会生成若干 `test_*` 可执行文件
-
-## 快速开始
-
-### 1. 准备数据和模型
-
-WikiText-2 原始文本默认放在：
-
-MobileFineTuner does not bundle pretrained weights or benchmark datasets. This
-matches the PyTorch/Transformers convention: the framework ships code, and the
-application passes a local model/data path at runtime.
-
-Use shared asset roots for reproducible local runs:
-
-```bash
-export MFT_MODEL_ROOT=/path/to/mft-models
-export MFT_DATA_ROOT=/path/to/mft-data
-```
-
-Expected layout:
+Each phone must have the same base model at:
 
 ```text
-$MFT_MODEL_ROOT/
-  gpt2/
-  gpt2-medium/
-  gemma-3-270m/
-  gemma-3-1b-pt/
-  Qwen3-0.6B/
-
-$MFT_DATA_ROOT/
-  wikitext2/wikitext-2-raw/
-  mmlu/data/
+/data/local/tmp/mft_qwen3
 ```
 
-Each model directory is a HuggingFace-style snapshot containing `config.json`,
-tokenizer files, and either `model.safetensors` or a HuggingFace sharded
-SafeTensors layout with `model.safetensors.index.json`. Per-model overrides such
-as `QWEN_MODEL_DIR`, `GPT2_SMALL_MODEL_DIR`, and `GEMMA_270M_MODEL_DIR` are also
-supported.
-
-To verify what this checkout will use on your machine:
+The current wireless three-phone form is:
 
 ```bash
-bash scripts/check_local_assets.sh
+export FEDRL_SERIALS="10.203.22.73:5555 10.203.34.125:5556 10.203.4.60:5556"
 ```
 
-See [docs/MODEL_ASSETS.md](docs/MODEL_ASSETS.md) for exact file requirements
-and download examples.
+## Run One Federated Round
 
-### 2. Validate the Five Training Entrypoints
-
-Run the repo-level smoke suite before using real assets:
+DPO round 001:
 
 ```bash
-bash scripts/run_training_smoke.sh
+OBJECTIVE=dpo ROUND=001 STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+  scripts/android/run_fedrl_round_with_monitor.sh
 ```
 
-This performs a two-step synthetic training pass for GPT-2 small, GPT-2 medium, Gemma 270M, Gemma 1B-PT, and Qwen.
-
-To run a one-step real-asset sanity pass across the five training entrypoints:
+KTO round 001:
 
 ```bash
-bash scripts/run_training_real_assets.sh
+OBJECTIVE=kto ROUND=001 STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+  scripts/android/run_fedrl_round_with_monitor.sh
 ```
 
-To verify that C++ tokenization matches HuggingFace token IDs for local
-tokenizer snapshots:
+Round 2 and later load the previous global adapter before local training:
 
 ```bash
-python3 scripts/generate_tokenizer_hf_golden_fixtures.py
-MFT_TOKENIZER_GOLDEN_JSONL=runs/tokenizer_golden/hf_tokenizer_golden.jsonl \
-  ctest --test-dir operator/build --output-on-failure -R TokenizerHFGolden
+OBJECTIVE=dpo ROUND=002 STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+  PREVIOUS_GLOBAL_ADAPTER="runs/fedrl_round_001_dpo/global_dpo_lora_adapter.jsonl" \
+  scripts/android/run_fedrl_round_with_monitor.sh
 ```
 
-See [docs/MODEL_ASSETS.md](docs/MODEL_ASSETS.md) for the tokenizer alignment
-asset contract.
+The runner writes:
 
-### 3. Use the Unified C++ API
-
-Applications that do not need model-specific diagnostics can use the Auto API:
-
-```cpp
-#include "mobile_finetuner/mobile_finetuner.h"
-
-auto tokenizer = ops::TokenizerFactory::from_pretrained(model_dir);
-auto model = ops::AutoModelForCausalLM::from_pretrained(model_dir);
-model->init_lora(ops::AutoLoraConfig::attention_qkvo());
-
-ops::AutoTrainerConfig trainer_cfg;
-trainer_cfg.learning_rate = 2e-4f;
-ops::AutoTrainer trainer(*model, trainer_cfg);
-
-ops::CausalLMBatchConfig batch_cfg;
-batch_cfg.sequence_length = 64;
-auto batch = ops::make_causal_lm_batch(*tokenizer, {"Example text."}, batch_cfg);
-auto step = trainer.train_step(batch);
+```text
+runs/fedrl_round_<ROUND>_<OBJECTIVE>/
+  <serial>/<run_name>/{report.json,metrics.ndjson,reference_logps.jsonl,qwen_<objective>_lora_adapter.jsonl}
+  monitor/<serial>.csv
+  global_<objective>_lora_adapter.jsonl
+  global_<objective>_lora_adapter.jsonl.manifest.json
+  device_summary.csv
+  summary.json
 ```
 
-For a maintained multi-step loop, wrap an existing dataset in a provider and use
-`fit`:
+## Run Many Rounds
 
-```cpp
-ops::WikiText2BatchProvider provider(dataset);
-ops::AutoFitConfig fit_cfg;
-fit_cfg.max_steps = 100;
-fit_cfg.batch_size = 4;
-auto summary = trainer.fit(provider, fit_cfg);
-```
-
-The lower-level GPT-2, Gemma, and Qwen graph classes remain available for
-alignment debugging and model-specific experiment runners.
-
-### 4. Run LoRA Fine-Tuning
-
-#### WikiText-2 LoRA
-- **GPT-2 Small (124M):**
-  ```bash
-  (
-    cd examples/gpt2_small_lora_finetune &&
-    TRAIN_MODE=wt2 STEPS=200 BATCH_SIZE=4 GRAD_ACCUM_STEPS=2 ./run_train.sh
-  )
-  ```
-- **GPT-2 Medium (355M):**
-  ```bash
-  (
-    cd examples/gpt2_medium_lora_finetune &&
-    TRAIN_MODE=wt2 STEPS=200 BATCH_SIZE=2 GRAD_ACCUM_STEPS=2 ./run_train.sh
-  )
-  ```
-- **Gemma 270M:**
-  ```bash
-  (
-    cd examples/gemma_3_270m_lora_finetune &&
-    TRAIN_MODE=wt2 STEPS=200 BATCH_SIZE=4 GRAD_ACCUM_STEPS=1 ./run_train.sh
-  )
-  ```
-- **Gemma 1B-PT:**
-  ```bash
-  (
-    cd examples/gemma_3_1b_pt_lora_finetune &&
-    TRAIN_MODE=wt2 STEPS=200 BATCH_SIZE=2 GRAD_ACCUM_STEPS=2 ./run_train.sh
-  )
-  ```
-- **Qwen3-0.6B:**
-  ```bash
-  (
-    cd examples/qwen_lora_finetune &&
-    MAX_STEPS=200 BATCH_SIZE=1 GRAD_ACCUM_STEPS=1 ./run_wikitext.sh
-  )
-  ```
-
-#### MMLU LoRA
-
-GPT-2 and Gemma consume task JSONL prepared by `run_prepare_data.sh`, with
-answer-label masks for the multiple-choice objective. Qwen consumes the raw CSV
-tree under `data/mmlu/data` directly and does not use JSONL.
-
-- **GPT-2 Small / Medium:**
-  ```bash
-  (
-    cd examples/gpt2_small_lora_finetune &&
-    ./run_prepare_data.sh &&
-    TRAIN_MODE=mmlu STEPS=200 ./run_train.sh
-  )
-  (
-    cd examples/gpt2_medium_lora_finetune &&
-    ./run_prepare_data.sh &&
-    TRAIN_MODE=mmlu STEPS=200 ./run_train.sh
-  )
-  ```
-- **Gemma 270M / 1B-PT:**
-  ```bash
-  (
-    cd examples/gemma_3_270m_lora_finetune &&
-    ./run_prepare_data.sh &&
-    TRAIN_MODE=mmlu STEPS=200 ./run_train.sh
-  )
-  (
-    cd examples/gemma_3_1b_pt_lora_finetune &&
-    ./run_prepare_data.sh &&
-    TRAIN_MODE=mmlu STEPS=200 ./run_train.sh
-  )
-  ```
-- **Qwen3-0.6B:**
-  ```bash
-  (
-    cd examples/qwen_lora_finetune &&
-    MAX_STEPS=150 BATCH_SIZE=8 ./run_mmlu.sh
-  )
-  ```
-
-#### QNLI LoRA
-
-QNLI is prepared as standard causal-LM task JSONL:
-
-```json
-{"ids":[...], "mask":[...], "attention_mask":[...]}
-```
-
-`mask` selects answer tokens for answer-only supervision. Full-token CE ignores
-`mask` and supervises every real shifted token indicated by `attention_mask`.
-The maintained native Android path uses Qwen:
+Use the same loop for 100 or 200 rounds. Change `seq 1 200` to `seq 1 100`
+for a 100-round run.
 
 ```bash
-(
-  cd examples/qwen_lora_finetune &&
-  MAX_STEPS=3 BATCH_SIZE=8 SEQ_LEN=64 LOSS_IMPL=full_dense ./run_qnli.sh
-)
+export FEDRL_SERIALS="10.203.22.73:5555 10.203.34.125:5556 10.203.4.60:5556"
+OBJECTIVE=dpo
+PREV=""
+
+for n in $(seq 1 200); do
+  ROUND="$(printf '%03d' "$n")"
+  if [ -n "$PREV" ]; then
+    OBJECTIVE="$OBJECTIVE" ROUND="$ROUND" PREVIOUS_GLOBAL_ADAPTER="$PREV" \
+      STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+      scripts/android/run_fedrl_round_with_monitor.sh
+  else
+    OBJECTIVE="$OBJECTIVE" ROUND="$ROUND" \
+      STEPS=10 SEQ_LEN=64 RANK=2 ALPHA=4 LR=0.001 \
+      scripts/android/run_fedrl_round_with_monitor.sh
+  fi
+  PREV="runs/fedrl_round_${ROUND}_${OBJECTIVE}/global_${OBJECTIVE}_lora_adapter.jsonl"
+done
 ```
 
-See [docs/CURRENT_FAMILY_TASK_MATRIX.md](docs/CURRENT_FAMILY_TASK_MATRIX.md) for
-the current family/task support boundary.
+Set `OBJECTIVE=kto` for the KTO federation.
 
-#### GPT-2 Small Full Fine-Tune (WikiText-2)
-```bash
-export GPT2_SMALL_MODEL_DIR=$MFT_MODEL_ROOT/gpt2
-export WT2_DATA_DIR=$MFT_DATA_ROOT/wikitext2/wikitext-2-raw
+## Default Training Parameters
 
-cmake -S examples/gpt2_small_lora_finetune -B examples/gpt2_small_lora_finetune/build
-cmake --build examples/gpt2_small_lora_finetune/build --target train_full -j
-examples/gpt2_small_lora_finetune/build/train_full \
-  --data_dir "$WT2_DATA_DIR" \
-  --pretrained_dir "$GPT2_SMALL_MODEL_DIR" \
-  --output_path runs/gpt2_small_full_ft.safetensors \
-  --epochs 1 --batch_size 4 --grad_accum_steps 2 --seq_len 128 \
-  --rank 8 --alpha 16 --lr 2e-4 --warmup_steps 100
-```
+| Parameter | Value |
+| --- | --- |
+| Base model | Qwen3-0.6B under `/data/local/tmp/mft_qwen3` |
+| Adapter | LoRA on `q_proj`, `k_proj`, `v_proj`, `o_proj` |
+| Rank / alpha | `2 / 4` |
+| Steps per local round | `10` by default |
+| Sequence length | `64` |
+| Learning rate | `0.001` |
+| Beta | `0.1` |
+| Batch size | `4` when `steps <= 5`, otherwise `2` |
+| Aggregation | FedAvg weighted by `feedback_pairs` |
 
-## Model and Dataset Assets
+## Validation
 
-The industrial package boundary is:
-
-- `operator/` provides the reusable C++ training core.
-- model app directories provide example CLIs for GPT-2, Gemma, and Qwen.
-- pretrained weights, datasets, run logs, and generated adapters are runtime
-  assets and are not part of the source distribution.
-
-Resolution order for maintained scripts is:
-
-1. explicit per-model/data environment variables, for example
-   `QWEN_MODEL_DIR` or `QWEN_DATA_DIR`;
-2. shared roots `MFT_MODEL_ROOT` and `MFT_DATA_ROOT`;
-3. the repo-local fallback directories such as
-   `examples/qwen_lora_finetune/pretrained/` and `data/wikitext2/wikitext-2-raw/`.
-
-The fallback directories are useful for local research, but they are ignored by
-Git and should not be used as a release mechanism. For a new machine or CI
-worker, prefer explicit asset roots and validate them with:
+Run lightweight checks before pushing:
 
 ```bash
-bash scripts/check_local_assets.sh
+python3 scripts/prepare_fedrl_datasets.py
+bash -n scripts/android/*.sh scripts/federated/*.sh scripts/run_kto_health_smoke.sh
+python3 -m py_compile scripts/prepare_fedrl_datasets.py scripts/federated/*.py scripts/convert_dpo_to_kto_jsonl.py
+cd android-visualizer && ./gradlew :app:testDebugUnitTest
 ```
 
-Detailed layout and download examples are documented in
-[docs/MODEL_ASSETS.md](docs/MODEL_ASSETS.md).
-
-更多 PyTorch 对齐示例见 [pytorch_alignment/README.md](pytorch_alignment/README.md)。
-
-## 测试怎么跑
-
-这个仓库目前至少有三类测试入口。
-
-### 1. Python 单测
-
-### Qwen Family (Alibaba)
-- **Qwen3-0.6B**: Lightweight decoder-only transformer with rotary embeddings and QKV sharing
-
-### Llama Family
-- **Llama 3.x snapshots**: validated experimental native graph support with
-  strict SafeTensors mapping, tied/untied output head handling, Llama3 RoPE
-  scaling, and q/k/v/o LoRA.
-- **Llama 3.x tokenizer.json assets**: ByteLevel-BPE tokenizer support with
-  HuggingFace golden alignment.
-- **Real-weight alignment gate**: local Llama 3.2-1B-Instruct fixture passed
-  tokenizer ID, shifted causal-LM loss, and last-token logits top-k alignment
-  against PyTorch/Transformers.
-- SentencePiece-only, Unigram, Metaspace-only, GPT2-tokenizer Llama-like
-  variants, and chat-template execution are not claimed by this adapter.
-
-### Mistral Family
-- **Mistral configs**: recognized by `ModelRegistry` with q/k/v/o LoRA defaults.
-- `TokenizerFactory` and `AutoModelForCausalLM` reject Mistral explicitly until
-  Mistral tokenizer, sliding-window/mask, SafeTensors, and PyTorch alignment
-  gates pass.
-
-### Adding New Models
-
-MobileFineTuner follows the same high-level split used by PyTorch/Transformers:
-
-- `ModelRegistry::inspect_pretrained(model_dir)` reads `config.json` and
-  identifies the supported model family, assets, tied-embedding behavior, and
-  default LoRA targets.
-- `TokenizerFactory::from_pretrained(model_dir)` returns the correct
-  model-specific tokenizer behind one `ops::Tokenizer` interface.
-- `AutoModelForCausalLM::from_pretrained(model_dir)` constructs the supported
-  GPT-2, Gemma, Qwen, or validated experimental Llama graph and loads SafeTensors with
-  correct layout defaults.
-- `AutoTrainer` provides shared causal-LM LoRA `train_step` and `fit` loops.
-- model graph classes under `finetune_ops/graph/` implement the architecture
-  math and HuggingFace weight-name mapping.
-- LoRA injection is defined by target module names, not by application
-  directory names.
-
-Different models should keep their own tokenizer algorithms. The framework
-standardizes how applications request tokenization; it does not force GPT-2,
-Gemma, Qwen, Llama-family, and future Mistral-family models to share one
-vocabulary or pre-tokenizer.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the extension contract.
-
----
-
-## Core Components
-
-### Tensor & Autograd Engine
-
-**Custom Tensor Implementation:**
-- Pooled memory allocation for reduced malloc overhead
-- Automatic gradient tracking with topological sort-based backward pass
-- In-place operation support with copy-on-write semantics
-
-```cpp
-// Example: Forward and backward through custom ops
-auto x = Tensor::randn({batch_size, seq_len, hidden_dim});
-auto y = ops::linear(x, weight, bias);
-auto loss = ops::mse_loss(y, target);
-loss.backward();  // Automatic gradient computation
-```
-
-### Model Graphs
-
-**GPT-2 Architecture:**
-- Transformer decoder with fused QKV attention
-- Causal attention masking for autoregressive generation
-- Layer normalization and residual connections
-
-**Gemma Architecture:**
-- Grouped Query Attention (GQA) for reduced memory footprint
-- RoPE (Rotary Position Embedding) for positional encoding
-- GeGLU activation in feed-forward layers
-
-### LoRA Injection
-
-Parameter-Efficient Fine-Tuning (PEFT) via Low-Rank Adaptation:
-- Inject trainable low-rank matrices into attention and MLP layers
-- Freeze base model parameters to reduce memory and computation
-- PEFT-compatible SafeTensors format for adapter persistence
-
-```cpp
-// LoRA injection targets
-GPT-2:  Attn QKV + Attn Proj
-Gemma:  Q/K/V/O projections + Gate/Up/Down MLP projections
-Qwen:   Q/K/V/O projections
-Llama:  Q/K/V/O projections
-```
-
-### SafeTensors I/O
-
-Fast and safe tensor serialization:
-- Load pretrained weights from HuggingFace format
-- Automatic key mapping for model compatibility
-- Optional transpose for linear layer weights
-- Save LoRA adapters in PEFT-compatible format
-
----
-
-## Architecture
-
-The reusable library is organized around HuggingFace-style runtime assets rather
-than bundled checkpoints:
-
-```cpp
-#include "mobile_finetuner/mobile_finetuner.h"
-
-auto spec = ops::ModelRegistry::inspect_pretrained(model_dir);
-auto tokenizer = ops::TokenizerFactory::from_pretrained(model_dir);
-auto model = ops::AutoModelForCausalLM::from_pretrained(model_dir);
-```
-
-`spec.family` selects the graph implementation, `tokenizer` owns the
-model-specific tokenization algorithm, and `AutoModelForCausalLM` maps external
-checkpoint keys into the selected graph. `AutoTrainer` provides the shared
-native C++ one-step LoRA training core. Concrete graph classes remain public for
-specialized diagnostics and model-specific experiments.
-
-Detailed design and extension rules are in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
----
-
-## Runtime Memory Controls
-
-MobileFineTuner keeps the stable library focused on transparent C++ training
-semantics. The default memory controls are explicit and easy to audit:
-
-- model weights and datasets are loaded from runtime asset paths rather than
-  bundled into the library;
-- SafeTensors loading supports HuggingFace single-file and sharded checkpoints;
-- the training CLIs expose batch size, sequence length, step count, learning
-  rate, and gradient accumulation as runtime knobs;
-- the core tensor runtime can use the step arena allocator for selected
-  workloads through `-DUSE_ARENA_ALLOCATOR=ON`;
-- Android helper scripts can sample RSS and process telemetry during native
-  training runs.
-
-### Gradient Accumulation
-
-Divide large batches into micro-batches to reduce activation memory:
-
-```bash
-python -m unittest tests.test_dpo_utils
-```
-
-Result: Forward/backward runs on `batch_size / grad_accum_steps = 2` samples at a time, reducing peak activation memory by ~75% while maintaining gradient quality.
-
----
-
-## Evaluation
-
-### Perplexity (WikiText-2)
-
-Measure language modeling quality:
-```bash
-cmake -S examples/gpt2_small_lora_finetune -B examples/gpt2_small_lora_finetune/build
-cmake --build examples/gpt2_small_lora_finetune/build --target eval_ppl -j
-examples/gpt2_small_lora_finetune/build/eval_ppl \
-  --data_root "$MFT_DATA_ROOT/wikitext2/wikitext-2-raw" \
-  --pretrained_dir "$MFT_MODEL_ROOT/gpt2" \
-  --lora_path examples/gpt2_small_lora_finetune/outputs/lora_final.safetensors \
-  --lora_merge 1
-```
-
-**Expected Results:**
-- GPT-2 Small baseline: ~29.5 PPL
-- GPT-2 Small + LoRA (1 epoch): ~26.8 PPL
-
-### MMLU Benchmark
-
-Multi-task language understanding:
-```bash
-(
-  cd examples/gpt2_small_lora_finetune &&
-  ./run_eval.sh
-)
-(
-  cd examples/gpt2_medium_lora_finetune &&
-  ./run_eval.sh
-)
-(
-  cd examples/gemma_3_270m_lora_finetune &&
-  ./run_eval.sh
-)
-(
-  cd examples/gemma_3_1b_pt_lora_finetune &&
-  ./run_eval.sh
-)
-
-# Direct GPT-2 eval binary invocation
-examples/gpt2_small_lora_finetune/build/eval_mmlu \
-  --mmlu_root "$MFT_DATA_ROOT/mmlu/data" \
-  --split dev \
-  --pretrained_dir "$MFT_MODEL_ROOT/gpt2" \
-  --lora_path examples/gpt2_small_lora_finetune/outputs/lora_final.safetensors \
-  --lora_merge 1 \
-  --fewshot 0
-```
-
----
-
-## Benchmarks
-
-Performance depends on device hardware, BLAS availability, model size, sequence
-length, batch size, and thermal state. The repository keeps benchmark
-collection scripts, not generated result files, in the release tree.
-
-Recommended benchmark protocol:
-
-```bash
-bash scripts/run_training_smoke.sh
-bash scripts/run_training_real_assets.sh
-bash scripts/android/run_qwen_qnli_native_phone.sh
-```
-
-For Android runs, pair the native training command with
-`scripts/android/adb_resource_monitor.sh` to collect RSS and system telemetry.
-Store generated logs, adapters, plots, and spreadsheets under `runs/` or an
-external artifact directory; these paths are intentionally ignored by Git.
-
----
-
-## Project Structure
-
-Start with [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the maintained
-directory map. In short:
-
-- `operator/` is the reusable C++ training core.
-- `examples/` contains model-specific native CLIs.
-- `android-visualizer/` contains the Android app, SDK module, and sample app.
-- `pytorch_alignment/` contains lightweight Python DPO/KTO reference utilities.
-- `scripts/` contains stable repo-level automation.
-- `review-stage/` contains research-stage datasets, notes, and validation
-  harnesses.
-- `runs/` and `data/` are local runtime/output areas and are ignored by Git.
-
-```bash
-ctest --output-on-failure
-```
-
-仓库里也有一些独立测试二进制，例如：
-
-- `test_gemma_config`
-- `test_gemma_forward`
-- `test_tokenizer_gemma`
-- `test_qkt_softmax_grad`
-- `test_rmsnorm_unit`
-- `test_train_minimal`
-
-这些通常会在 `operator/build/` 下生成，必要时可以单独执行：
-
-```bash
-./test_gemma_config
-```
-
-### 3. Android 单测
-
-```bash
-cd android-visualizer
-./gradlew :app:testDebugUnitTest
-```
-
-如果要顺带跑 lint 和打 debug 包：
-
-```bash
-./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
-```
-
-## PyTorch 对齐
-
-`pytorch_alignment/` 目录提供轻量级 PyTorch 对齐参考工具，用来在进入
-C++ / Android 路径前验证数据格式、loss、metrics 和反传行为：
-
-- DPO / KTO 数据加载和 collate
-- sequence log-prob、DPO loss、KTO loss
-- reward metrics 和 eval helpers
-- tiny smoke 中的梯度/冻结 reference 检查
-
-KTO 当前一键 smoke 入口：
-
-```bash
-bash scripts/run_kto_health_smoke.sh
-```
-
-更多说明见 [pytorch_alignment/README.md](pytorch_alignment/README.md)。
-
-## Android 可视化
-
-`android-visualizer/` 是配套的 Android 监控面板，可以实时查看：
-
-- 训练进度
-- loss / ppl / lr / RSS
-- 日志流
-- run 对比结果
-
-构建命令：
-
-```bash
-cd android-visualizer
-./gradlew assembleDebug
-```
-
-## 支持的模型
-
-- GPT-2 Small / Medium
-- Gemma 3 270M
-- Gemma 3 1B-PT
-- Qwen3-0.6B
-
-## 引用
-
-```bibtex
-@article{geng2025mobilefinetuner,
-  title={MobileFineTuner: A Unified End-to-End Framework for Fine-Tuning LLMs on Mobile Phones},
-  author={Geng, Jiaxiang and Zhao, Lunyu and Lu, Yiyi and Luo, Bing},
-  journal={arXiv preprint arXiv:2512.08211},
-  year={2025}
-}
-```
-
-## License
-
-本项目采用 Apache 2.0 许可证，详见 [LICENSE](LICENSE)。
+Full Android builds require a local Android SDK/NDK and are intentionally not
+committed as artifacts.

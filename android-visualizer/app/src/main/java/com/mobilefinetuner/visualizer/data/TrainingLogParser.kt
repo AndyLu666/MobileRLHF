@@ -20,6 +20,9 @@ object TrainingLogParser {
     private data class MutableMetric(
         val step: Int,
         var totalSteps: Int? = null,
+        var trainSamples: Int? = null,
+        var feedbackPairs: Int? = null,
+        var sampleCount: Int? = null,
         var loss: Double? = null,
         var ppl: Double? = null,
         var lr: Double? = null,
@@ -36,6 +39,9 @@ object TrainingLogParser {
             return StepMetric(
                 step = step,
                 totalSteps = totalSteps,
+                trainSamples = trainSamples,
+                feedbackPairs = feedbackPairs,
+                sampleCount = sampleCount,
                 loss = loss,
                 ppl = ppl,
                 lr = lr,
@@ -336,6 +342,9 @@ object TrainingLogParser {
             val metric = StepMetric(
                 step = step,
                 totalSteps = findInt(trimmed, "total_steps"),
+                trainSamples = findInt(trimmed, "train_samples"),
+                feedbackPairs = findInt(trimmed, "feedback_pairs"),
+                sampleCount = findInt(trimmed, "sample_count"),
                 loss = findDouble(trimmed, "loss"),
                 ppl = findDouble(trimmed, "ppl"),
                 lr = findDouble(trimmed, "lr"),

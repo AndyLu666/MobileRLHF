@@ -1,4 +1,0 @@
-{"prompt":"User: Say hello politely.\nAssistant:","chosen":" Hello! Nice to meet you.","rejected":" No."}
-{"prompt":"User: What is 2 + 2?\nAssistant:","chosen":" 2 + 2 equals 4.","rejected":" Maybe 5."}
-{"prompt":"User: Finish the phrase 'good morning'.\nAssistant:","chosen":" Good morning! How can I help?","rejected":" bad night."}
-{"prompt":"User: Reply with a short thank-you.\nAssistant:","chosen":" Thank you very much.","rejected":" Whatever."}

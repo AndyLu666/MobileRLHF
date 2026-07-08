@@ -47,7 +47,7 @@ TOP_P="$TOP_P" \
 "$SCRIPT_DIR/run_hfrl_infer_sim.sh"
 
 TRAIN_PREF="$QWEN_OUT/inference_feedback.jsonl"
-EVAL_PREF="${EVAL_PREF:-$REPO_ROOT/review-stage/data/hf_fitness_pref_eval.jsonl}"
+EVAL_PREF="${EVAL_PREF:-$REPO_ROOT/android-visualizer/app/src/main/assets/mft_demo_data/fedrl_hf_fitness_dpo_eval.jsonl}"
 if [ ! -s "$TRAIN_PREF" ]; then
   echo "No inference feedback was generated at $TRAIN_PREF" >&2
   exit 1

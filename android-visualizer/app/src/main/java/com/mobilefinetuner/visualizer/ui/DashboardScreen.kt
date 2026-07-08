@@ -165,7 +165,7 @@ fun DashboardScreen(
                             )
                             Column {
                                 Text(
-                                    text  = "MobileFineTuner",
+                                    text  = APP_BRAND_NAME,
                                     style = MaterialTheme.typography.headlineSmall
                                 )
                                 Text(
@@ -191,7 +191,7 @@ fun DashboardScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                if (ui.activeTab != DashboardTab.EXPERIMENTS && ui.activeTab != DashboardTab.RUNNER) {
+                if (ui.activeTab == DashboardTab.RUNNER) {
                     ControlBar(
                         runs = ui.runHandles,
                         selectedRunId = ui.selectedRunId,
@@ -220,7 +220,7 @@ fun DashboardScreen(
                                     text = shortTabTitle(tab),
                                     maxLines = 1,
                                     overflow = TextOverflow.Clip,
-                                    style = MaterialTheme.typography.bodyMedium
+                                    style = MaterialTheme.typography.bodySmall
                                 )
                             }
                         )
@@ -251,10 +251,10 @@ fun DashboardScreen(
                     }
                 ) { tab ->
                     val feedbackSession = ui.feedbackSession
+                    val demoSnapshot = activeRunSnapshotForDemo(ui.nativeDemoRunner, ui.snapshot)
                     if (feedbackSession != null &&
                         !feedbackSession.isComplete &&
-                        tab != DashboardTab.EXPERIMENTS &&
-                        tab != DashboardTab.RUNNER
+                        tab == DashboardTab.RUNNER
                     ) {
                         FeedbackCollectionPanel(
                             session = feedbackSession,
@@ -262,32 +262,34 @@ fun DashboardScreen(
                         )
                     } else when (tab) {
                         DashboardTab.RUNNER -> RunnerScreen(runner = ui.runner, viewModel = viewModel)
-                        DashboardTab.OVERVIEW -> OverviewTab(snapshot = ui.snapshot)
-                        DashboardTab.TRAINING -> TrainingTab(snapshot = ui.snapshot)
-                        DashboardTab.COMPARISON -> ComparisonTab(
-                            primary = ui.snapshot,
-                            compare = ui.compareSnapshot,
-                            compareName = ui.runHandles.firstOrNull { it.id == ui.compareRunId }?.name
+                        DashboardTab.OVERVIEW -> DemoSystemPage(
+                            runner = ui.nativeDemoRunner,
+                            inference = ui.nativeInference,
+                            snapshot = demoSnapshot
                         )
-                        DashboardTab.LOGS -> LogsTab(snapshot = ui.snapshot)
-                        DashboardTab.EXPERIMENTS -> ExperimentsTab(
-                            runs = ui.runHandles,
-                            selectedRunId = ui.selectedRunId,
-                            compareRunId = ui.compareRunId,
+                        DashboardTab.TRAINING -> DemoPairInferencePage(
+                            inference = ui.nativeInference,
+                            runner = ui.nativeDemoRunner,
+                            snapshot = demoSnapshot,
+                            onStateChange = viewModel::updateNativeInference,
+                            onGeneratePair = viewModel::runNativeInferencePair,
+                            onChooseCandidate = viewModel::chooseNativeInferenceCandidate
+                        )
+                        DashboardTab.COMPARISON -> DemoSingleInferencePage(
+                            inference = ui.nativeInference,
+                            runner = ui.nativeDemoRunner,
+                            snapshot = demoSnapshot,
+                            onStateChange = viewModel::updateNativeInference,
+                            onGenerateSingle = viewModel::runNativeInference,
+                            onChooseRating = viewModel::chooseNativeInferenceRating
+                        )
+                        DashboardTab.LOGS -> LogsTab(snapshot = demoSnapshot)
+                        DashboardTab.EXPERIMENTS -> DemoTrainingPage(
                             config = ui.nativeDemoConfig,
                             runner = ui.nativeDemoRunner,
                             inference = ui.nativeInference,
-                            snapshot = ui.snapshot,
-                            feedbackSession = feedbackSession,
-                            onPickDirectory = { picker.launch(null) },
-                            onEnableDemo = viewModel::enableDemoMode,
+                            snapshot = demoSnapshot,
                             onEnableDpoTest = viewModel::enableDpoTestMode,
-                            onChooseFeedback = viewModel::chooseFeedback,
-                            onInferenceChange = viewModel::updateNativeInference,
-                            onGenerateSingle = viewModel::runNativeInference,
-                            onGeneratePair = viewModel::runNativeInferencePair,
-                            onChooseCandidate = viewModel::chooseNativeInferenceCandidate,
-                            onChooseRating = viewModel::chooseNativeInferenceRating,
                             onConfigChange = viewModel::updateNativeDemoConfig,
                             onStart = viewModel::startNativeDemoRun,
                             onStop = viewModel::stopNativeDemoRun
@@ -1617,6 +1619,271 @@ private fun MiniMetricChip(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DemoTrainingPage(
+    config: NativeDemoConfig,
+    runner: NativeDemoRunnerState,
+    inference: NativeInferenceState,
+    snapshot: RunSnapshot?,
+    onEnableDpoTest: () -> Unit,
+    onConfigChange: (NativeDemoConfig) -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit
+) {
+    val summary = buildPaperDemoSummaryState(config, runner, snapshot)
+    val primaryAction = buildDemoPrimaryActionState(runner, snapshot)
+    val isTraining = runner.status == NativeDemoRunStatus.RUNNING ||
+        runner.status == NativeDemoRunStatus.STOPPING
+    val chartPreview = buildDemoChartPreviewState(snapshot, isTraining = isTraining)
+    val workflowSteps = buildDemoWorkflowSteps(inference, runner, snapshot)
+    val trainingFigure = buildPaperFigureStates(inference, runner, snapshot)
+        .first { it.kind == PaperFigureKind.TRAINING_CURVES }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            PaperConsoleHeader(
+                summary = summary,
+                primaryAction = primaryAction,
+                chartPreview = chartPreview,
+                runner = runner,
+                onEnableDpoTest = onEnableDpoTest,
+                onStart = onStart,
+                onStop = onStop
+            )
+        }
+        item { WorkflowStrip(steps = workflowSteps) }
+        item { TrainingCurveFigure(trainingFigure) }
+        item {
+            PaperKtoTrainingPanel(
+                config = config,
+                runner = runner,
+                snapshot = snapshot,
+                onConfigChange = onConfigChange,
+                onStart = onStart,
+                onStop = onStop
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DemoSystemPage(
+    runner: NativeDemoRunnerState,
+    inference: NativeInferenceState,
+    snapshot: RunSnapshot?
+) {
+    val systemFigure = buildPaperFigureStates(inference, runner, snapshot)
+        .first { it.kind == PaperFigureKind.SYSTEM_MONITOR }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.White
+            ) {
+                Column(
+                    modifier = Modifier
+                        .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    SectionHeader(
+                        title = "System Monitor",
+                        subtitle = "On-device KTO runtime footprint: memory and step progress only."
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        maxItemsInEachRow = 2
+                    ) {
+                        MiniMetricChip(
+                            label = "Peak Memory",
+                            value = systemFigure.primaryMetric,
+                            accent = RssColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MiniMetricChip(
+                            label = "Steps",
+                            value = systemFigure.secondaryMetric.removePrefix("Steps "),
+                            accent = NeonBlue,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+        item { SystemMonitorFigure(systemFigure) }
+    }
+}
+
+@Composable
+private fun DemoPairInferencePage(
+    inference: NativeInferenceState,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?,
+    onStateChange: (NativeInferenceState) -> Unit,
+    onGeneratePair: () -> Unit,
+    onChooseCandidate: (String) -> Unit
+) {
+    val pairFigure = buildPaperFigureStates(inference, runner, snapshot)
+        .first { it.kind == PaperFigureKind.PAIR_CHOICE }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.White
+            ) {
+                Column(
+                    modifier = Modifier
+                        .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    SectionHeader(
+                        title = "A/B Inference Feedback",
+                        subtitle = "Generate two local answers, then thumb up the better response."
+                    )
+                    OutlinedTextField(
+                        value = inference.prompt,
+                        onValueChange = { onStateChange(inference.copy(prompt = it, feedbackMode = NativeFeedbackMode.PAIR)) },
+                        label = { Text("Question") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    Button(
+                        onClick = {
+                            onStateChange(inference.copy(feedbackMode = NativeFeedbackMode.PAIR))
+                            onGeneratePair()
+                        },
+                        enabled = !inference.isRunning,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (inference.isRunning) "Generating..." else "Generate A/B")
+                    }
+                }
+            }
+        }
+        item { PairPreferenceFigure(pairFigure) }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                CandidatePreferenceBlock(
+                    label = "A",
+                    text = pairFigure.answerA,
+                    enabled = !inference.isRunning,
+                    selected = inference.lastChosenLabel == "A",
+                    modifier = Modifier.weight(1f),
+                    onChoose = { onChooseCandidate("A") }
+                )
+                CandidatePreferenceBlock(
+                    label = "B",
+                    text = pairFigure.answerB,
+                    enabled = !inference.isRunning,
+                    selected = inference.lastChosenLabel == "B",
+                    modifier = Modifier.weight(1f),
+                    onChoose = { onChooseCandidate("B") }
+                )
+            }
+        }
+        inference.feedbackStatus?.let { status ->
+            item { InlineStatus(message = status, accent = NeonGreen) }
+        }
+    }
+}
+
+@Composable
+private fun DemoSingleInferencePage(
+    inference: NativeInferenceState,
+    runner: NativeDemoRunnerState,
+    snapshot: RunSnapshot?,
+    onStateChange: (NativeInferenceState) -> Unit,
+    onGenerateSingle: () -> Unit,
+    onChooseRating: (Boolean) -> Unit
+) {
+    val singleFigure = buildPaperFigureStates(inference, runner, snapshot)
+        .first { it.kind == PaperFigureKind.SINGLE_RATING }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = Color.White
+            ) {
+                Column(
+                    modifier = Modifier
+                        .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    SectionHeader(
+                        title = "Single-Answer Feedback",
+                        subtitle = "Generate one answer and convert thumbs up/down into KTO labels."
+                    )
+                    OutlinedTextField(
+                        value = inference.prompt,
+                        onValueChange = { onStateChange(inference.copy(prompt = it, feedbackMode = NativeFeedbackMode.SINGLE)) },
+                        label = { Text("Question") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    Button(
+                        onClick = {
+                            onStateChange(inference.copy(feedbackMode = NativeFeedbackMode.SINGLE))
+                            onGenerateSingle()
+                        },
+                        enabled = !inference.isRunning,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(if (inference.isRunning) "Generating..." else "Generate One")
+                    }
+                }
+            }
+        }
+        item { SingleFeedbackFigure(singleFigure) }
+        item {
+            SingleRatingBlock(
+                text = singleFigure.answerA,
+                upSelected = inference.lastRatingLabel == "UP",
+                downSelected = inference.lastRatingLabel == "DOWN",
+                enabled = !inference.isRunning,
+                onThumbUp = { onChooseRating(true) },
+                onThumbDown = { onChooseRating(false) }
+            )
+        }
+        inference.feedbackStatus?.let { status ->
+            item { InlineStatus(message = status, accent = NeonGreen) }
+        }
+    }
+}
+
 @Composable
 private fun ExperimentsTab(
     runs: List<RunHandle>,
@@ -1692,8 +1959,9 @@ private fun PaperDemoConsole(
     val summary = buildPaperDemoSummaryState(config, runner, snapshot)
     val input = buildDemoInputState(inference, runner)
     val evidence = buildDemoEvidenceState(config, runner, snapshot)
-    val primaryAction = buildDemoPrimaryActionState(runner)
+    val primaryAction = buildDemoPrimaryActionState(runner, snapshot)
     val chartPreview = buildDemoChartPreviewState(snapshot)
+    val paperFigures = buildPaperFigureStates(inference, runner, snapshot)
     val runLabels = buildPaperRunLabelState(
         selectedRunName = runs.firstOrNull { it.id == selectedRunId }?.name,
         compareRunName = runs.firstOrNull { it.id == compareRunId }?.name,
@@ -1719,6 +1987,9 @@ private fun PaperDemoConsole(
                         onStart = onStart,
                         onStop = onStop
                     )
+                }
+                PaperModeSection.PAPER_FIGURES -> item {
+                    PaperFigureShowcase(figures = paperFigures)
                 }
                 PaperModeSection.WORKFLOW -> item {
                     WorkflowStrip(steps = workflowSteps)
@@ -1787,6 +2058,16 @@ private fun PaperConsoleHeader(
     onStop: () -> Unit
 ) {
     val running = runner.status == NativeDemoRunStatus.RUNNING || runner.status == NativeDemoRunStatus.STOPPING
+    val statusLabel = if (summary.readinessLabel == "Demo ready") {
+        NativeDemoRunStatus.COMPLETED.name
+    } else {
+        runner.status.name
+    }
+    val statusColor = if (summary.readinessLabel == "Demo ready") {
+        NeonGreen
+    } else {
+        nativeRunnerColor(runner.status)
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -1813,11 +2094,11 @@ private fun PaperConsoleHeader(
                     )
                 }
                 Text(
-                    text = runner.status.name,
+                    text = statusLabel,
                     style = MaterialTheme.typography.labelLarge,
-                    color = nativeRunnerColor(runner.status),
+                    color = statusColor,
                     modifier = Modifier
-                        .background(nativeRunnerColor(runner.status).copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                        .background(statusColor.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 )
             }
@@ -2014,6 +2295,271 @@ private fun PaperChartPreview(preview: DemoChartPreviewState) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PaperFigureShowcase(figures: List<PaperFigureState>) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = Color.White
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, Color(0xFFE1E5EC), RoundedCornerShape(8.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            SectionHeader(
+                title = "Paper Figures",
+                subtitle = "Four demo panels for system state, feedback collection, preference choice, and KTO training."
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                figures.forEach { figure ->
+                    when (figure.kind) {
+                        PaperFigureKind.SYSTEM_MONITOR -> SystemMonitorFigure(figure)
+                        PaperFigureKind.SINGLE_RATING -> SingleFeedbackFigure(figure)
+                        PaperFigureKind.PAIR_CHOICE -> PairPreferenceFigure(figure)
+                        PaperFigureKind.TRAINING_CURVES -> TrainingCurveFigure(figure)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PaperFigureFrame(
+    title: String,
+    subtitle: String,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(accent.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = 0.18f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        content()
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SystemMonitorFigure(figure: PaperFigureState) {
+    PaperFigureFrame(
+        title = figure.title,
+        subtitle = figure.subtitle,
+        accent = RssColor
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            maxItemsInEachRow = 2
+        ) {
+            MiniMetricChip(label = "Peak RSS", value = figure.primaryMetric, accent = RssColor, modifier = Modifier.weight(1f))
+            MiniMetricChip(label = "Run", value = figure.secondaryMetric, accent = NeonBlue, modifier = Modifier.weight(1f))
+        }
+        InteractiveMetricLineChart(
+            title = "RSS Memory",
+            subtitle = "MB",
+            values = figure.memoryValues,
+            color = RssColor,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp),
+            valueFormatter = { "${format1(it)} MB" }
+        )
+    }
+}
+
+@Composable
+private fun SingleFeedbackFigure(figure: PaperFigureState) {
+    PaperFigureFrame(
+        title = figure.title,
+        subtitle = figure.subtitle,
+        accent = NeonGreen
+    ) {
+        PromptCaption(figure.prompt)
+        Text(
+            text = figure.answerA,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color.White, RoundedCornerShape(8.dp))
+                .border(1.dp, Color(0xFFDDE2EC), RoundedCornerShape(8.dp))
+                .padding(10.dp)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FeedbackBadge(
+                label = "Good",
+                selected = figure.goodSelected,
+                accent = NeonGreen,
+                modifier = Modifier.weight(1f)
+            )
+            FeedbackBadge(
+                label = "Bad",
+                selected = figure.badSelected,
+                accent = LossColor,
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun PairPreferenceFigure(figure: PaperFigureState) {
+    PaperFigureFrame(
+        title = figure.title,
+        subtitle = figure.subtitle,
+        accent = NeonBlue
+    ) {
+        PromptCaption(figure.prompt)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AnswerChoiceCard(
+                label = "A",
+                text = figure.answerA,
+                selected = figure.selectedAnswer == "A",
+                modifier = Modifier.weight(1f)
+            )
+            AnswerChoiceCard(
+                label = "B",
+                text = figure.answerB,
+                selected = figure.selectedAnswer == "B",
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TrainingCurveFigure(figure: PaperFigureState) {
+    PaperFigureFrame(
+        title = figure.title,
+        subtitle = figure.subtitle,
+        accent = NeonBlue
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            maxItemsInEachRow = 2
+        ) {
+            MiniMetricChip(label = "Final Loss", value = figure.primaryMetric.removePrefix("Loss "), accent = LossColor, modifier = Modifier.weight(1f))
+            MiniMetricChip(label = "Reward Margin", value = figure.secondaryMetric.removePrefix("Margin "), accent = NeonBlue, modifier = Modifier.weight(1f))
+        }
+        InteractiveMetricLineChart(
+            title = "Loss",
+            subtitle = "Lower is better",
+            values = figure.lossValues,
+            color = LossColor,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp)
+        )
+        InteractiveMetricLineChart(
+            title = "Reward Margin",
+            subtitle = "Higher is better",
+            values = figure.rewardMarginValues,
+            color = NeonBlue,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 150.dp)
+        )
+    }
+}
+
+@Composable
+private fun PromptCaption(prompt: String) {
+    Text(
+        text = "Question: $prompt",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis
+    )
+}
+
+@Composable
+private fun FeedbackBadge(
+    label: String,
+    selected: Boolean,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .background(if (selected) accent.copy(alpha = 0.14f) else Color.White, RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = if (selected) 0.42f else 0.20f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (label.equals("Bad", ignoreCase = true)) {
+                Icons.Rounded.ThumbDown
+            } else {
+                Icons.Rounded.ThumbUp
+            },
+            contentDescription = if (selected) "$label selected" else label,
+            tint = accent,
+            modifier = Modifier.size(28.dp)
+        )
+    }
+}
+
+@Composable
+private fun AnswerChoiceCard(
+    label: String,
+    text: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val accent = if (selected) NeonGreen else Color(0xFF8D95A3)
+    Column(
+        modifier = modifier
+            .background(Color.White, RoundedCornerShape(8.dp))
+            .border(1.dp, accent.copy(alpha = if (selected) 0.46f else 0.20f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = if (selected) "Answer $label - chosen" else "Answer $label",
+            style = MaterialTheme.typography.labelLarge,
+            color = accent,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 5,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 @Composable
 private fun WorkflowStrip(steps: List<DemoWorkflowStepState>) {
     Surface(
@@ -2125,7 +2671,7 @@ private fun PaperGeneratePreferPanel(
                 )
                 MiniMetricChip(
                     label = "Model",
-                    value = if (state.useFedCampusBridge) "FedCampus bridge" else "Qwen3-0.6B",
+                    value = if (state.useMobileRLHFBridge) "MobileRLHF bridge" else "Qwen3-0.6B",
                     accent = RssColor,
                     modifier = Modifier.weight(1f)
                 )
@@ -2172,14 +2718,14 @@ private fun PaperGeneratePreferPanel(
                 }
             }
             ToggleRow(
-                label = "Use FedCampus bridge",
-                checked = state.useFedCampusBridge,
+                label = "Use MobileRLHF bridge",
+                checked = state.useMobileRLHFBridge,
                 enabled = !state.isRunning,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                onStateChange(state.copy(useFedCampusBridge = it))
+                onStateChange(state.copy(useMobileRLHFBridge = it))
             }
-            if (state.useFedCampusBridge) {
+            if (state.useMobileRLHFBridge) {
                 OutlinedTextField(
                     value = state.bridgeUrl,
                     onValueChange = { onStateChange(state.copy(bridgeUrl = it)) },
@@ -2222,7 +2768,7 @@ private fun PaperGeneratePreferPanel(
                     onClick = if (isPairMode) onGeneratePair else onGenerateSingle,
                     enabled = !state.isRunning &&
                         state.prompt.isNotBlank() &&
-                        (state.useFedCampusBridge || state.modelDir.isNotBlank()),
+                        (state.useMobileRLHFBridge || state.modelDir.isNotBlank()),
                     modifier = Modifier.weight(1f).heightIn(min = 56.dp)
                 ) {
                     Icon(Icons.Rounded.PlayArrow, contentDescription = null)
@@ -2359,20 +2905,26 @@ private fun SingleRatingBlock(
             Button(
                 onClick = onThumbUp,
                 enabled = enabled,
-                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                shape = CircleShape,
+                modifier = Modifier.weight(1f).heightIn(min = 64.dp)
             ) {
-                Icon(Icons.Rounded.ThumbUp, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(if (upSelected) "Saved Up" else "Good")
+                Icon(
+                    Icons.Rounded.ThumbUp,
+                    contentDescription = if (upSelected) "Saved thumbs up" else "Thumbs up",
+                    modifier = Modifier.size(34.dp)
+                )
             }
             OutlinedButton(
                 onClick = onThumbDown,
                 enabled = enabled,
-                modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                shape = CircleShape,
+                modifier = Modifier.weight(1f).heightIn(min = 64.dp)
             ) {
-                Icon(Icons.Rounded.ThumbDown, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(if (downSelected) "Saved Down" else "Bad")
+                Icon(
+                    Icons.Rounded.ThumbDown,
+                    contentDescription = if (downSelected) "Saved thumbs down" else "Thumbs down",
+                    modifier = Modifier.size(34.dp)
+                )
             }
         }
     }
@@ -3129,9 +3681,14 @@ private fun CandidatePreferenceBlock(
         Button(
             onClick = onChoose,
             enabled = enabled,
-            modifier = Modifier.fillMaxWidth()
+            shape = CircleShape,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp)
         ) {
-            Text(if (selected) "Saved $label" else "Prefer $label")
+            Icon(
+                Icons.Rounded.ThumbUp,
+                contentDescription = if (selected) "Saved answer $label" else "Prefer answer $label",
+                modifier = Modifier.size(32.dp)
+            )
         }
     }
 }
@@ -3438,11 +3995,11 @@ private fun nativeRunnerColor(status: NativeDemoRunStatus): Color {
 private fun shortTabTitle(tab: DashboardTab): String {
     return when (tab) {
         DashboardTab.RUNNER -> "Run"
-        DashboardTab.OVERVIEW -> "Prog"
-        DashboardTab.TRAINING -> "Charts"
-        DashboardTab.COMPARISON -> "Diff"
+        DashboardTab.OVERVIEW -> "System"
+        DashboardTab.TRAINING -> "A/B"
+        DashboardTab.COMPARISON -> "Single"
         DashboardTab.LOGS -> "Logs"
-        DashboardTab.EXPERIMENTS -> "Demo"
+        DashboardTab.EXPERIMENTS -> "Train"
     }
 }
 

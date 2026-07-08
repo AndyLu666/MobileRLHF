@@ -1,0 +1,4 @@
+[Step 29] Loss=5.94000 PPL=379.930 LR=0.000100
+[Step 30] Loss=5.81000 PPL=333.620 LR=0.000100
+[GemmaTrainer] Reached max_steps=30, stopping early.
+Gemma LoRA training completed

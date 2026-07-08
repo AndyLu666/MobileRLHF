@@ -88,6 +88,52 @@ object NativeKtoMetrics {
         return json
     }
 
+    fun dpoStepJson(
+        step: Int,
+        batchSize: Int,
+        trainSamples: Int,
+        feedbackPairs: Int,
+        trainableParams: Int,
+        loss: Float,
+        rewardAccuracy: Float,
+        rewardMargin: Float,
+        chosenReward: Float,
+        rejectedReward: Float,
+        pairCount: Int,
+        validResponseTokens: Int,
+        elapsedMs: Long,
+        rssMb: Double?
+    ): JSONObject {
+        val json = JSONObject()
+        val fields = linkedMapOf<String, Any>(
+            "step" to step,
+            "source" to "android_native_dpo",
+            "batch_size" to batchSize,
+            "train_samples" to trainSamples,
+            "feedback_pairs" to feedbackPairs,
+            "policy_trainable_params" to trainableParams,
+            "policy_nonzero_grad_params" to trainableParams,
+            "policy_frozen_params_with_grad" to 0,
+            "reference_grad_params" to 0,
+            "loss" to loss,
+            "reward_accuracy" to rewardAccuracy,
+            "reward_margin" to rewardMargin,
+            "chosen_reward" to chosenReward,
+            "rejected_reward" to rejectedReward,
+            "pair_count" to pairCount,
+            "valid_response_tokens" to validResponseTokens,
+            "elapsed_ms" to elapsedMs,
+            "reference_logps" to "base_model_cached"
+        )
+        if (rssMb != null) {
+            fields["rss_mb"] = rssMb
+        }
+        for ((key, value) in fields) {
+            json.put(key, value)
+        }
+        return json
+    }
+
     fun updatePeakRssMb(currentPeakMb: Double?, sampleMb: Double?): Double? {
         return when {
             sampleMb == null -> currentPeakMb

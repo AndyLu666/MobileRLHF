@@ -35,8 +35,8 @@ Convert DPO pairs into KTO binary records with:
 
 ```bash
 python3 scripts/convert_dpo_to_kto_jsonl.py \
-  --input review-stage/data/health_dpo_curated_train.jsonl \
-  --output review-stage/data/health_kto_train.jsonl
+  --input android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_dpo_train.jsonl \
+  --output android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_kto_train.jsonl
 ```
 
 ## Current KTO Smoke
@@ -61,8 +61,8 @@ You can also call the CLI directly:
 python3 -m pytorch_alignment.kto_cli \
   --backend qwen \
   --model_dir examples/qwen_lora_finetune/pretrained \
-  --kto_jsonl review-stage/data/health_kto_train.jsonl \
-  --eval_jsonl review-stage/data/health_kto_eval.jsonl \
+  --kto_jsonl android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_kto_train.jsonl \
+  --eval_jsonl android-visualizer/app/src/main/assets/mft_demo_data/fedrl_health_kto_eval.jsonl \
   --out_dir runs/kto_qwen3_0_6b_manual \
   --max_steps 5 \
   --batch_size 4 \

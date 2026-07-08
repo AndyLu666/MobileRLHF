@@ -18,7 +18,7 @@ class QaPreferenceToolTest(unittest.TestCase):
             input_path = tmpdir / "qa.jsonl"
             output_path = tmpdir / "dpo.jsonl"
             input_path.write_text(
-                json.dumps({"prompt": "地球是圆的还是方的？", "response": "圆的"}, ensure_ascii=False) + "\n",
+                json.dumps({"prompt": "Is the Earth round or square?", "response": "Round."}) + "\n",
                 encoding="utf-8",
             )
 
@@ -33,7 +33,7 @@ class QaPreferenceToolTest(unittest.TestCase):
                     "--backend",
                     "fake",
                     "--fake_rejected",
-                    "方的",
+                    "Square.",
                 ],
                 check=True,
                 cwd=REPO_ROOT,
@@ -41,9 +41,9 @@ class QaPreferenceToolTest(unittest.TestCase):
 
             rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0]["prompt"], "地球是圆的还是方的？")
-            self.assertEqual(rows[0]["chosen"], "圆的")
-            self.assertEqual(rows[0]["rejected"], "方的")
+            self.assertEqual(rows[0]["prompt"], "Is the Earth round or square?")
+            self.assertEqual(rows[0]["chosen"], "Round.")
+            self.assertEqual(rows[0]["rejected"], "Square.")
 
     def test_judge_qa_answers_with_gold_backend(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -55,20 +55,16 @@ class QaPreferenceToolTest(unittest.TestCase):
                 "\n".join(
                     [
                         json.dumps(
-                            {"prompt": "地球是圆的还是方的？", "response": "圆的", "gold": "圆的"},
-                            ensure_ascii=False,
+                            {"prompt": "Is the Earth round or square?", "response": "Round.", "gold": "Round."},
                         ),
                         json.dumps(
-                            {"prompt": "地球是圆的还是方的？", "response": "方的", "gold": "圆的"},
-                            ensure_ascii=False,
+                            {"prompt": "Is the Earth round or square?", "response": "Square.", "gold": "Round."},
                         ),
                         json.dumps(
-                            {"prompt": "水在标准大气压下多少摄氏度沸腾？", "response": "100 摄氏度", "gold": "100 摄氏度"},
-                            ensure_ascii=False,
+                            {"prompt": "At sea level, what temperature does water boil at?", "response": "100 C", "gold": "100 C"},
                         ),
                         json.dumps(
-                            {"prompt": "水在标准大气压下多少摄氏度沸腾？", "response": "0 摄氏度", "gold": "100 摄氏度"},
-                            ensure_ascii=False,
+                            {"prompt": "At sea level, what temperature does water boil at?", "response": "0 C", "gold": "100 C"},
                         ),
                     ]
                 )
@@ -100,11 +96,11 @@ class QaPreferenceToolTest(unittest.TestCase):
 
             pairs = [json.loads(line) for line in pair_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(pairs), 2)
-            self.assertEqual(pairs[0]["prompt"], "地球是圆的还是方的？")
-            self.assertEqual(pairs[0]["chosen"], "圆的")
-            self.assertEqual(pairs[0]["rejected"], "方的")
-            self.assertEqual(pairs[1]["chosen"], "100 摄氏度")
-            self.assertEqual(pairs[1]["rejected"], "0 摄氏度")
+            self.assertEqual(pairs[0]["prompt"], "Is the Earth round or square?")
+            self.assertEqual(pairs[0]["chosen"], "Round.")
+            self.assertEqual(pairs[0]["rejected"], "Square.")
+            self.assertEqual(pairs[1]["chosen"], "100 C")
+            self.assertEqual(pairs[1]["rejected"], "0 C")
 
     def test_qwen_judge_text_fallback(self):
         good = parse_judgment_text_fallback("The response is correct and answers the question.", "qwen_answer_judge")

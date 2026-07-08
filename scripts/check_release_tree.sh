@@ -24,16 +24,25 @@ check_no_personal_paths() {
 	    scripts/prepare_mcq_jsonl.py
 	    scripts/prepare_qnli_jsonl.py
 	    scripts/check_peft_lora_step_fixture.sh
+    scripts/convert_dpo_to_kto_jsonl.py
+    scripts/prepare_fedrl_datasets.py
     scripts/run_training_smoke.sh
     scripts/run_training_real_assets.sh
     scripts/android/android_env.sh
     scripts/android/adb_resource_monitor.sh
     scripts/android/build_mft_sdk_aar.sh
     scripts/android/build_qwen_android.sh
+    scripts/android/clear_global_adapter.sh
+    scripts/android/collect_fedrl_round.sh
+    scripts/android/distribute_global_adapter.sh
     scripts/android/publish_mft_sdk_local.sh
+    scripts/android/run_fedrl_round_with_monitor.sh
     scripts/android/run_mft_sdk_device_smoke.sh
     scripts/android/run_qwen_qnli_native_phone.sh
     scripts/android/stage_qwen_qnli_phone_assets.sh
+    scripts/federated/run_fedrl_round.sh
+    docs/FEDERATED_DPO_KTO_PHONE_RUNBOOK.md
+    docs/FEDERATED_DPO_KTO_DATA_DESIGN.md
     operator/CMakeLists.txt
     operator/cmake/OperatorsConfig.cmake.in
     operator/cmake/MobileFineTunerConfig.cmake.in
@@ -281,10 +290,15 @@ check_shell_syntax() {
     scripts/android/android_env.sh
     scripts/android/build_mft_sdk_aar.sh
     scripts/android/build_qwen_android.sh
-    scripts/android/publish_mft_sdk_local.sh
-    scripts/android/run_mft_sdk_device_smoke.sh
-    scripts/android/run_qwen_qnli_native_phone.sh
-    scripts/android/stage_qwen_qnli_phone_assets.sh
+	    scripts/android/publish_mft_sdk_local.sh
+    scripts/android/clear_global_adapter.sh
+    scripts/android/collect_fedrl_round.sh
+    scripts/android/distribute_global_adapter.sh
+    scripts/android/run_fedrl_round_with_monitor.sh
+	    scripts/android/run_mft_sdk_device_smoke.sh
+	    scripts/android/run_qwen_qnli_native_phone.sh
+	    scripts/android/stage_qwen_qnli_phone_assets.sh
+    scripts/federated/run_fedrl_round.sh
     examples/gpt2_small_lora_finetune/run_train.sh
     examples/gpt2_medium_lora_finetune/run_train.sh
     examples/gemma_3_270m_lora_finetune/run_train.sh
@@ -308,8 +322,13 @@ check_python_syntax() {
     scripts/generate_tokenizer_hf_golden_fixtures.py
     scripts/prepare_arcc_jsonl.py
     scripts/prepare_mcq_jsonl.py
-    scripts/prepare_qnli_jsonl.py
-    scripts/pretokenize_wikitext2_gemma.py
+	    scripts/prepare_qnli_jsonl.py
+    scripts/convert_dpo_to_kto_jsonl.py
+    scripts/prepare_fedrl_datasets.py
+    scripts/qa_preference_tools.py
+    scripts/federated/aggregate_lora_jsonl.py
+    scripts/federated/summarize_fedrl_round.py
+	    scripts/pretokenize_wikitext2_gemma.py
   )
   (
     cd "$ROOT"

@@ -28,6 +28,8 @@ cmake_install.cmake
 
 # Model weights and data (too large for GitHub)
 data/
+!android-visualizer/app/src/main/java/com/mobilefinetuner/visualizer/data/
+!android-visualizer/app/src/main/java/com/mobilefinetuner/visualizer/data/**
 !operator/finetune_ops/data/
 !operator/finetune_ops/data/**
 gemma-3-270m/
@@ -45,17 +47,12 @@ pytorch_runs/
 **/outputs/
 **/logs/
 review-stage/
-review-stage/phone_artifacts/
 *.csv
 *.xlsx
 *.log
 *.jsonl
-!review-stage/
-!review-stage/data/
-!review-stage/data/*.jsonl
-!review-stage/scripts/
-!review-stage/scripts/kto_sanity_check.py
 !android-visualizer/app/src/main/assets/**/*.jsonl
+!android-visualizer/app/src/test/resources/samples/*.log
 
 # Local QA artifacts and downloaded third-party source trees
 verification/

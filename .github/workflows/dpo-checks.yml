@@ -4,7 +4,10 @@ on:
   pull_request:
     paths:
       - "pytorch_alignment/**"
-      - "review-stage/**"
+      - "android-visualizer/app/src/main/assets/mft_demo_data/**"
+      - "scripts/convert_dpo_to_kto_jsonl.py"
+      - "scripts/prepare_fedrl_datasets.py"
+      - "scripts/federated/**"
       - "tests/**"
       - ".github/workflows/dpo-checks.yml"
   push:
@@ -13,7 +16,10 @@ on:
       - dpo-trainer-parity
     paths:
       - "pytorch_alignment/**"
-      - "review-stage/**"
+      - "android-visualizer/app/src/main/assets/mft_demo_data/**"
+      - "scripts/convert_dpo_to_kto_jsonl.py"
+      - "scripts/prepare_fedrl_datasets.py"
+      - "scripts/federated/**"
       - "tests/**"
       - ".github/workflows/dpo-checks.yml"
 
@@ -36,10 +42,15 @@ jobs:
           pip install torch transformers peft
 
       - name: Run DPO unit tests
-        run: python -m unittest tests.test_dpo_utils
+        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_dpo_utils tests.test_qa_preference_tools
 
-      - name: Run DPO sanity smoke
-        run: PYTHONPATH=. python review-stage/scripts/dpo_sanity_check.py
+      - name: Validate FedRL DPO/KTO datasets
+        run: PYTHONPATH=. python scripts/prepare_fedrl_datasets.py
 
-      - name: Run DPO dataset diagnostic
-        run: PYTHONPATH=. python review-stage/scripts/dpo_dataset_diagnostic.py
+      - name: Compile maintained FedRL scripts
+        run: |
+          python -m py_compile \
+            scripts/convert_dpo_to_kto_jsonl.py \
+            scripts/prepare_fedrl_datasets.py \
+            scripts/federated/aggregate_lora_jsonl.py \
+            scripts/federated/summarize_fedrl_round.py

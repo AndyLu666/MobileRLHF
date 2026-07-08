@@ -1,4 +1,0 @@
-{"prompt":"Task: Reply with the exact token GOOD.\nAssistant:","chosen":" GOOD","rejected":" ERROR"}
-{"prompt":"Task: Reply with the exact token YES.\nAssistant:","chosen":" YES!","rejected":" FALSE"}
-{"prompt":"Task: Finish with the word HELLO.\nAssistant:","chosen":" HELLO","rejected":" SORRY"}
-{"prompt":"Instruction: say THANKS only.\nAssistant:","chosen":" THANKS","rejected":" DENIED"}

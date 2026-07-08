@@ -14,6 +14,76 @@ import org.junit.Test
 
 class PaperDemoConsoleStateTest {
     @Test
+    fun appBrandUsesPaperFacingMobileRlhfName() {
+        assertThat(APP_BRAND_NAME).isEqualTo("MobileRLHF")
+    }
+
+    @Test
+    fun paperModeShowsFourFiguresBeforeAdvancedControls() {
+        val sections = buildPaperModeSections(showAdvanced = false)
+
+        assertThat(sections).containsExactly(
+            PaperModeSection.HERO,
+            PaperModeSection.PAPER_FIGURES,
+            PaperModeSection.WORKFLOW,
+            PaperModeSection.ADVANCED_TOGGLE
+        ).inOrder()
+    }
+
+    @Test
+    fun demoTopTabsMatchPaperDemoPages() {
+        val tabs = buildDemoTopTabStates()
+
+        assertThat(tabs.map { it.label }).containsExactly(
+            "Train",
+            "System",
+            "A/B",
+            "Single",
+            "Logs"
+        ).inOrder()
+    }
+
+    @Test
+    fun paperFiguresCoverSystemSinglePairAndTrainingCurves() {
+        val figures = buildPaperFigureStates(
+            inference = NativeInferenceState(
+                prompt = "How should I adjust today's activity plan?",
+                output = "Take a short walk after lunch and keep the evening routine light.",
+                candidateA = "Prioritize recovery and hydrate before a short walk.",
+                candidateB = "Double the workout intensity despite poor sleep.",
+                lastRatingLabel = "UP",
+                lastChosenLabel = "A"
+            ),
+            runner = NativeDemoRunnerState(trainingPairCount = 24),
+            snapshot = demoSnapshot(
+                loss = 0.3949413,
+                rewardAccuracy = 1.0,
+                rewardMargin = 0.88533133,
+                rssMb = 5279.3
+            )
+        )
+
+        assertThat(figures.map { it.kind }).containsExactly(
+            PaperFigureKind.SYSTEM_MONITOR,
+            PaperFigureKind.SINGLE_RATING,
+            PaperFigureKind.PAIR_CHOICE,
+            PaperFigureKind.TRAINING_CURVES
+        ).inOrder()
+        assertThat(figures[0].title).isEqualTo("System Monitor")
+        assertThat(figures[0].primaryMetric).isEqualTo("5279.3 MB")
+        assertThat(figures[0].secondaryMetric).isEqualTo("Steps 10")
+        assertThat(figures[0].secondaryMetric).doesNotContain("Rows")
+        assertThat(figures[1].title).isEqualTo("Single Answer Feedback")
+        assertThat(figures[1].prompt).contains("activity plan")
+        assertThat(figures[1].goodSelected).isTrue()
+        assertThat(figures[2].title).isEqualTo("A/B Preference")
+        assertThat(figures[2].selectedAnswer).isEqualTo("A")
+        assertThat(figures[3].title).isEqualTo("Loss / Reward")
+        assertThat(figures[3].lossValues.last()).isEqualTo(0.3949413)
+        assertThat(figures[3].rewardMarginValues.last()).isEqualTo(0.88533133)
+    }
+
+    @Test
     fun workflowMarksPreferSavedWhenFeedbackPairsExist() {
         val steps = buildDemoWorkflowSteps(
             inference = NativeInferenceState(savedPairs = 3),
@@ -170,6 +240,25 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun primaryActionReviewsEvidenceWhenCompletedSnapshotIsLoaded() {
+        val action = buildDemoPrimaryActionState(
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.READY,
+                trainingPairCount = 24
+            ),
+            snapshot = demoSnapshot(
+                loss = 0.3949413,
+                rewardAccuracy = 1.0,
+                rewardMargin = 0.88533133
+            )
+        )
+
+        assertThat(action.label).isEqualTo("Review Evidence")
+        assertThat(action.kind).isEqualTo(DemoPrimaryActionKind.REVIEW)
+        assertThat(action.enabled).isFalse()
+    }
+
+    @Test
     fun chartPreviewProvidesSampleCurvesBeforeTraining() {
         val preview = buildDemoChartPreviewState(snapshot = null)
 
@@ -207,11 +296,63 @@ class PaperDemoConsoleStateTest {
     }
 
     @Test
+    fun runningChartPreviewClearsInsteadOfShowingPreviewCurves() {
+        val preview = buildDemoChartPreviewState(snapshot = null, isTraining = true)
+
+        assertThat(preview.title).isEqualTo("Live Training Charts")
+        assertThat(preview.subtitle).isEqualTo("Waiting for Android metrics")
+        assertThat(preview.isLive).isTrue()
+        assertThat(preview.lossValues).isEmpty()
+        assertThat(preview.rewardMarginValues).isEmpty()
+    }
+
+    @Test
+    fun runningFiguresStartFromEmptySystemAndTrainingMetrics() {
+        val figures = buildPaperFigureStates(
+            inference = NativeInferenceState(),
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.RUNNING,
+                currentRunName = "phone_qwen_feedback_kto_10s_new"
+            ),
+            snapshot = null
+        )
+
+        val system = figures.first { it.kind == PaperFigureKind.SYSTEM_MONITOR }
+        val training = figures.first { it.kind == PaperFigureKind.TRAINING_CURVES }
+
+        assertThat(system.primaryMetric).isEqualTo("RSS pending")
+        assertThat(system.secondaryMetric).isEqualTo("Steps 0")
+        assertThat(system.memoryValues).isEmpty()
+        assertThat(training.lossValues).isEmpty()
+        assertThat(training.rewardMarginValues).isEmpty()
+    }
+
+    @Test
+    fun activeDemoSnapshotDropsStaleCompletedRunWhileTraining() {
+        val stale = demoSnapshot(
+            loss = 0.3949413,
+            rewardAccuracy = 1.0,
+            rewardMargin = 0.88533133
+        )
+
+        val active = activeRunSnapshotForDemo(
+            runner = NativeDemoRunnerState(
+                status = NativeDemoRunStatus.RUNNING,
+                currentRunName = "phone_qwen_feedback_kto_10s_new"
+            ),
+            snapshot = stale
+        )
+
+        assertThat(active).isNull()
+    }
+
+    @Test
     fun paperModeKeepsDebugSectionsOutOfDefaultView() {
         val sections = buildPaperModeSections(showAdvanced = false)
 
         assertThat(sections).containsExactly(
             PaperModeSection.HERO,
+            PaperModeSection.PAPER_FIGURES,
             PaperModeSection.WORKFLOW,
             PaperModeSection.ADVANCED_TOGGLE
         ).inOrder()
@@ -223,6 +364,7 @@ class PaperDemoConsoleStateTest {
 
         assertThat(sections).containsExactly(
             PaperModeSection.HERO,
+            PaperModeSection.PAPER_FIGURES,
             PaperModeSection.WORKFLOW,
             PaperModeSection.ADVANCED_TOGGLE,
             PaperModeSection.DATA_CONTROLS,
