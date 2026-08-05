@@ -17,7 +17,7 @@ Avoid saying raw health data, prompts, or rejected/chosen text are uploaded unle
 
 The Android demo runner uses `NativeDemoConfig.dpoPairForward`:
 
-- `false`: native KTO path, `createKtoTrainer()` + `trainKtoPreferenceBatch()`
+- `false`: canonical native KTO path, `createKtoTrainer()` + `trainKtoBatch()`
 - `true`: native DPO path, `createDpoTrainer()` + `trainPreferenceBatch()`
 
 The DPO path writes:
@@ -135,7 +135,8 @@ python3 scripts/federated/aggregate_lora_jsonl.py \
   --output runs/fedrl_round_001_dpo/global_dpo_lora_adapter.jsonl
 ```
 
-The default FedAvg weight is `feedback_pairs` from each phone's `report.json`. To override weights:
+The default FedAvg weight is objective-aware: `feedback_pairs` for DPO and
+`binary_feedback_rows` for KTO. To override weights:
 
 ```bash
 python3 scripts/federated/aggregate_lora_jsonl.py \
@@ -166,7 +167,8 @@ collects the exact run artifacts it started, writes `device_summary.csv`, and ag
 
 For each objective and each phone, keep:
 
-- `report.json` with `objective`, `feedback_pairs`, `max_steps`, `batch_size`, `lora_rank`, `lora_alpha`
+- `report.json` with `objective`, the objective-specific feedback row count,
+  `max_steps`, `batch_size`, `lora_rank`, and `lora_alpha`
 - `metrics.ndjson` with finite `loss`, `reward_accuracy`, and `reward_margin`
 - `reference_logps.jsonl` proving the reference side was cached before local training
 - `qwen_dpo_lora_adapter.jsonl` or `qwen_kto_lora_adapter.jsonl`

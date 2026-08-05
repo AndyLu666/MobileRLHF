@@ -1,9 +1,13 @@
 # MobileFineTuner Public API
 
-MobileFineTuner exposes one supported C++ entrypoint:
+MobileFineTuner exposes two supported language entrypoints:
+
+```c
+#include "mobile_finetuner/mobile_finetuner.h"   /* stable C ABI */
+```
 
 ```cpp
-#include "mobile_finetuner/mobile_finetuner.h"
+#include "mobile_finetuner/mobile_finetuner.hpp" // C++ convenience API
 ```
 
 Downstream projects should link the installed CMake target:
@@ -16,7 +20,8 @@ target_link_libraries(your_target PRIVATE MobileFineTuner::operators)
 The `finetune_ops/*` headers are still installed because the current examples
 use them directly, but new applications should include the umbrella header
 first. Historical or non-buildable APIs are excluded from the supported product
-surface.
+surface. C and other FFI consumers should use the opaque-handle C ABI described
+in [C_API.md](C_API.md); it does not expose C++ standard-library types.
 
 Model weights and datasets are external assets. The library accepts standard
 HuggingFace-style model directories with config/tokenizer files and either a
@@ -33,7 +38,7 @@ manually between supported GPT-2, Gemma, Qwen, and validated experimental Llama
 graph classes.
 
 ```cpp
-#include "mobile_finetuner/mobile_finetuner.h"
+#include "mobile_finetuner/mobile_finetuner.hpp"
 
 auto spec = ops::ModelRegistry::inspect_pretrained(model_dir);
 auto tokenizer = ops::TokenizerFactory::from_pretrained(model_dir);
@@ -101,12 +106,13 @@ By default it computes the same dense causal-LM objective through
 `AutoTrainerConfig::use_streaming_lm_loss = false` only when debugging against a
 dense-logits reference path.
 
-## DPO Training API
+## Alignment Training APIs
 
-MobileFineTuner supports two maintained training objectives:
+MobileFineTuner supports three maintained training objectives:
 
 - SFT: supervised causal-LM cross entropy through `AutoTrainer`.
 - DPO: Direct Preference Optimization through `DPOTrainer`.
+- KTO: binary desirable/undesirable feedback through `KTOTrainer`.
 
 DPO uses a different data contract from SFT. Each sample must provide one prompt,
 one preferred response, and one rejected response. MF tokenizes the two branches
@@ -154,6 +160,35 @@ By default `DPOTrainer` uses `streaming_dpo_loss_with_ref_logps`, which avoids
 materializing `[batch, sequence, vocab]` logits for the policy path. Set
 `DPOTrainerConfig::use_streaming_dpo_loss = false` only when comparing against a
 dense-logits reference implementation.
+
+KTO does not require chosen/rejected pairs. Each canonical `KTOSample` contains
+one prompt, one completion, and one binary desirability label. A batch must
+contain at least two ordered rows so `make_kto_batch` can rotate completions and
+construct the mismatched KL-estimation branch:
+
+```cpp
+std::vector<ops::KTOSample> feedback = {
+    {"Recovery?", "Take an easy walk.", true,  true, -8.1f, -8.4f},
+    {"Training?", "Ignore fatigue and sprint.", false, true, -9.2f, -9.0f},
+};
+
+ops::KTOBatchConfig kto_batch_cfg;
+kto_batch_cfg.sequence_length = 64;
+kto_batch_cfg.append_eos_to_completion = true;
+auto kto_batch = ops::make_kto_batch(*tokenizer, feedback, kto_batch_cfg);
+
+ops::KTOTrainerConfig kto_cfg;
+kto_cfg.beta = 0.1f;
+ops::KTOTrainer kto(*policy, kto_cfg);
+auto kto_step = kto.train_step(kto_batch);
+```
+
+For cached-reference KTO, every row must carry both its matched `ref_logp` and
+its rotated-branch `ref_kl_logp`. Those scores are valid only for the same
+ordered batch and batch-building configuration. Use `score_kto_logps` before
+initializing/changing LoRA, or pass a separate frozen reference model to the
+trainer. The `PreferenceBatch` overload remains a legacy compatibility path;
+new code should use `KTOBatch`.
 
 Use `named_trainable_parameters()` when exporting adapters, debugging PEFT
 alignment, or comparing optimizer-step fixtures. The names are stable internal
@@ -207,9 +242,10 @@ The Java entrypoint is:
 import com.mobilefinetuner.sdk.MobileFineTuner;
 ```
 
-It wraps the same C++ `AutoModelForCausalLM` and `AutoTrainer` objects through
-JNI. The Android SDK is a packaging layer, not a separate implementation. See
-`docs/ANDROID_SDK.md` for build, ABI, asset layout, and Java call-order details.
+It wraps the same C++ `AutoModelForCausalLM`, `AutoTrainer`, `DPOTrainer`, and
+canonical `KTOTrainer` objects through JNI. The Android SDK is a packaging
+layer, not a separate implementation. See `docs/ANDROID_SDK.md` for build, ABI,
+asset layout, cached KTO score ordering, and Java call-order details.
 
 The Android API also exposes `MobileFineTuner.selfTest(File workingDir)`, which
 runs a tiny synthetic native LoRA training step on device. This is intended for

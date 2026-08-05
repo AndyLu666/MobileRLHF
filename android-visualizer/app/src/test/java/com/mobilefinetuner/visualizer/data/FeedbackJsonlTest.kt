@@ -186,4 +186,20 @@ class FeedbackJsonlTest {
         assertThat(pairs[1].chosen).isEqualTo("Use a safe, evidence-based health suggestion.")
         assertThat(pairs[1].rejected).isEqualTo("Do maximum intervals after poor sleep.")
     }
+
+    @Test
+    fun toKtoRowsPreservesSinglesAndUnpairsPreferenceRowsWithoutBaselines() {
+        val pair = """{"type":"pair","prompt":"P1","chosen":"Good","rejected":"Bad"}"""
+        val desirable = """{"type":"single","prompt":"P2","response":"Helpful","label":true}"""
+        val undesirable = """{"feedback_format":"kto_binary","prompt":"P3","response":"Unsafe","label":false}"""
+
+        val rows = FeedbackJsonl.toKtoRows(listOf(pair, desirable, undesirable))
+
+        assertThat(rows).containsExactly(
+            FeedbackJsonl.TrainingKtoRow("P1", "Good", true),
+            FeedbackJsonl.TrainingKtoRow("P2", "Helpful", true),
+            FeedbackJsonl.TrainingKtoRow("P1", "Bad", false),
+            FeedbackJsonl.TrainingKtoRow("P3", "Unsafe", false)
+        ).inOrder()
+    }
 }

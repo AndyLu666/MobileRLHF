@@ -46,9 +46,19 @@ def report_weight(adapter: Path, explicit_weight: float | None, weight_key: str)
     report = adapter.with_name("report.json")
     if report.exists():
         row = json.loads(report.read_text(encoding="utf-8"))
-        value = row.get(weight_key)
-        if isinstance(value, (int, float)) and value > 0:
-            return float(value)
+        if weight_key == "auto":
+            objective = str(row.get("objective", "")).lower()
+            keys = (
+                ["binary_feedback_rows", "train_samples", "feedback_pairs"]
+                if objective == "kto"
+                else ["feedback_pairs", "train_samples", "binary_feedback_rows"]
+            )
+        else:
+            keys = [weight_key]
+        for key in keys:
+            value = row.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+                return float(value)
     return 1.0
 
 
@@ -113,8 +123,14 @@ def main() -> int:
                         help="Adapter path, optionally suffixed as path::weight.")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", type=Path, default=None)
-    parser.add_argument("--weight-key", default="feedback_pairs",
-                        help="report.json numeric field used when no explicit weight is supplied.")
+    parser.add_argument(
+        "--weight-key",
+        default="auto",
+        help=(
+            "report.json numeric field used when no explicit weight is supplied; "
+            "'auto' uses binary_feedback_rows for KTO and feedback_pairs for DPO"
+        ),
+    )
     args = parser.parse_args()
 
     inputs = []

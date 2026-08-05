@@ -6,7 +6,7 @@ federation workflow.
 Tracked public assets:
 
 - Android app and SDK source under `android-visualizer/`
-- Native MobileFineTuner source under `operator/`
+- Native MobileFineTuner source and stable C/C++ public interfaces under `operator/`
 - FedRL DPO/KTO JSONL assets under
   `android-visualizer/app/src/main/assets/mft_demo_data/`
 - adb federation scripts under `scripts/android/`

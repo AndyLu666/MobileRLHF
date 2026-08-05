@@ -10,7 +10,7 @@ aggregates adapters with FedAvg on the host.
 | Path | Purpose |
 | --- | --- |
 | `android-visualizer/` | Android app, SDK module, JNI bridge, and phone-side DPO/KTO runner. |
-| `operator/` | Native C++ training core used by the Android SDK. |
+| `operator/` | Native C++ training core plus stable C ABI used by downstream integrations. |
 | `scripts/android/` | adb automation for installing, starting, monitoring, collecting, and distributing adapters. |
 | `scripts/federated/` | FedAvg aggregation and round summarization. |
 | `scripts/prepare_fedrl_datasets.py` | Validates DPO data and regenerates KTO JSONL assets. |
@@ -28,11 +28,17 @@ MobileRLHF supports two preference objectives on device:
 | Objective | Android native trainer | Input view | Output adapter |
 | --- | --- | --- | --- |
 | DPO | `createDpoTrainer()` + `trainPreferenceBatch()` | `prompt/chosen/rejected` pairs | `qwen_dpo_lora_adapter.jsonl` |
-| KTO | `createKtoTrainer()` + `trainKtoPreferenceBatch()` | binary desirable/undesirable feedback, expanded from pairs when needed | `qwen_kto_lora_adapter.jsonl` |
+| KTO | `createKtoTrainer()` + `trainKtoBatch()` | unpaired `prompt/response/label` rows; pairs are explicitly unpaired by the data adapter | `qwen_kto_lora_adapter.jsonl` |
 
 Both objectives cache base-model reference log-probs, initialize a LoRA adapter,
 optionally load the previous global LoRA adapter, train locally, then save a
-JSONL LoRA adapter for aggregation.
+JSONL LoRA adapter for aggregation. Canonical KTO caches both the matched score
+and the rotated mismatched-completion KL score for each exact ordered batch.
+
+Native/FFI consumers can use the stable C API in
+[`operator/include/mobile_finetuner/mobile_finetuner.h`](operator/include/mobile_finetuner/mobile_finetuner.h).
+It is modeled after llama.cpp's opaque-handle style; see
+[`docs/C_API.md`](docs/C_API.md). C++ consumers use `mobile_finetuner.hpp`.
 
 ## Data Assets
 
@@ -49,10 +55,10 @@ Current bundled assets:
 | `fedrl_health` | 24 / 6 pairs | 48 / 12 binary rows |
 | `fedrl_hf_fitness` | 42 / 12 pairs | 84 / 24 binary rows |
 
-The Android runner uses the DPO-pair JSONL as its runtime input. KTO rounds
-expand those pairs internally before calling the native KTO trainer. The KTO
-JSONL assets are kept as validation/reference data for Python checks and smoke
-runs.
+The Android runner accepts either DPO-pair JSONL or KTO binary JSONL. KTO rounds
+preserve binary rows directly; a pair is explicitly converted into one
+desirable and one undesirable row before canonical KTO batching. The tracked
+KTO JSONL assets are also used by Python checks and smoke runs.
 
 Phone-collected A/B feedback remains in the app private directory and is used
 instead of the bundled dataset when present.
@@ -160,7 +166,7 @@ Set `OBJECTIVE=kto` for the KTO federation.
 | Learning rate | `0.001` |
 | Beta | `0.1` |
 | Batch size | `4` when `steps <= 5`, otherwise `2` |
-| Aggregation | FedAvg weighted by `feedback_pairs` |
+| Aggregation | FedAvg weighted by `feedback_pairs` for DPO or `binary_feedback_rows` for KTO |
 
 ## Validation
 

@@ -154,7 +154,9 @@ Environment overrides:
 
 Converts DPO `prompt/chosen/rejected` JSONL into KTO binary-feedback JSONL.
 Each DPO pair becomes two KTO records: the chosen response is written with
-`label=true`, and the rejected response is written with `label=false`.
+`label=true`, and the rejected response is written with `label=false`. The
+output follows the standard unpaired layout: all desirable rows first, then
+all undesirable rows.
 
 ```bash
 python3 scripts/convert_dpo_to_kto_jsonl.py \
@@ -222,8 +224,9 @@ OBJECTIVE=dpo ROUND=002 \
 
 ### `federated/aggregate_lora_jsonl.py`
 
-Aggregates MobileFineTuner JSONL LoRA adapters. By default, client weights come
-from each adapter's sibling `report.json` field `feedback_pairs`.
+Aggregates MobileFineTuner JSONL LoRA adapters. By default, client weights are
+objective-aware: `feedback_pairs` for DPO and `binary_feedback_rows` for KTO.
+Pass `--weight-key <field>` to override the automatic report-field selection.
 
 ```bash
 python3 scripts/federated/aggregate_lora_jsonl.py \

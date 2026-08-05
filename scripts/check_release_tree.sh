@@ -14,6 +14,7 @@ check_no_personal_paths() {
 	    README.md
 	    docs/ANDROID_SDK.md
 	    docs/CURRENT_FAMILY_TASK_MATRIX.md
+	    docs/C_API.md
 	    docs/MODEL_ASSETS.md
     scripts/README.md
     scripts/asset_paths.py
@@ -47,6 +48,7 @@ check_no_personal_paths() {
     operator/cmake/OperatorsConfig.cmake.in
     operator/cmake/MobileFineTunerConfig.cmake.in
     operator/include/mobile_finetuner/mobile_finetuner.h
+    operator/include/mobile_finetuner/mobile_finetuner.hpp
   )
   local matches
   matches="$(cd "$ROOT" && rg -n '/Users/|Documents/pretrained_models|Documents/MobileFineTuner|Documents/MobileFinetuner' "${files[@]}" || true)"
@@ -144,6 +146,8 @@ check_package_files() {
     operator/cmake/OperatorsConfig.cmake.in
     operator/cmake/MobileFineTunerConfig.cmake.in
     operator/include/mobile_finetuner/mobile_finetuner.h
+    operator/include/mobile_finetuner/mobile_finetuner.hpp
+    docs/C_API.md
     docs/GETTING_STARTED.md
     docs/MODEL_ASSETS.md
     docs/PUBLIC_API.md

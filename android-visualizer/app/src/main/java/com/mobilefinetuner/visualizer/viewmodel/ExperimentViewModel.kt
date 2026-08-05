@@ -83,12 +83,83 @@ fun buildNativeHealthPrompt(
     """.trimIndent()
 }
 
+internal fun canonicalKtoBatchIndices(
+    rows: List<FeedbackJsonl.TrainingKtoRow>,
+    configuredBatchSize: Int,
+    step: Int
+): List<Int> {
+    require(rows.size >= 2) { "Canonical KTO requires at least two binary feedback rows" }
+    require(configuredBatchSize >= 2) { "Canonical KTO batch size must be at least two" }
+    require(step >= 1) { "step must be one-based" }
+
+    val effectiveBatchSize = minOf(configuredBatchSize, rows.size)
+    val desirable = rows.indices.filter { rows[it].desirable }
+    val undesirable = rows.indices.filterNot { rows[it].desirable }
+
+    val preferredDesirable = effectiveBatchSize / 2 +
+        if (effectiveBatchSize % 2 == 1 && step % 2 == 1) 1 else 0
+    var desirableCount = minOf(preferredDesirable, desirable.size)
+    var undesirableCount = minOf(effectiveBatchSize - desirableCount, undesirable.size)
+    var remaining = effectiveBatchSize - desirableCount - undesirableCount
+    val extraDesirable = minOf(remaining, desirable.size - desirableCount)
+    desirableCount += extraDesirable
+    remaining -= extraDesirable
+    undesirableCount += minOf(remaining, undesirable.size - undesirableCount)
+
+    fun cyclicTake(pool: List<Int>, start: Int, count: Int): List<Int> {
+        if (count == 0) return emptyList()
+        return List(count) { offset -> pool[(start + offset) % pool.size] }
+    }
+
+    // Prefer the step's next unused class slices, but consider cyclic shifts
+    // so duplicate prompts do not unnecessarily collapse the KL mismatch.
+    val desirableBase = if (desirable.isEmpty()) 0 else
+        ((step - 1) * maxOf(desirableCount, 1)) % desirable.size
+    val undesirableBase = if (undesirable.isEmpty()) 0 else
+        ((step - 1) * maxOf(undesirableCount, 1)) % undesirable.size
+    var best: List<Int>? = null
+    var bestMismatchEdges = -1
+    val desirableShiftCount = if (desirableCount == 0) 1 else desirable.size
+    val undesirableShiftCount = if (undesirableCount == 0) 1 else undesirable.size
+    for (desirableShift in 0 until desirableShiftCount) {
+        val desirableRows = cyclicTake(
+            desirable,
+            if (desirable.isEmpty()) 0 else (desirableBase + desirableShift) % desirable.size,
+            desirableCount
+        )
+        for (undesirableShift in 0 until undesirableShiftCount) {
+            val candidate = desirableRows + cyclicTake(
+                undesirable,
+                if (undesirable.isEmpty()) 0 else
+                    (undesirableBase + undesirableShift) % undesirable.size,
+                undesirableCount
+            )
+            val mismatchEdges = candidate.indices.count { position ->
+                val previous = candidate[(position - 1 + candidate.size) % candidate.size]
+                rows[previous].prompt != rows[candidate[position]].prompt
+            }
+            if (mismatchEdges > bestMismatchEdges) {
+                best = candidate
+                bestMismatchEdges = mismatchEdges
+            }
+        }
+    }
+    return checkNotNull(best)
+}
+
 class ExperimentViewModel(application: Application) : AndroidViewModel(application) {
 
     private data class PreferenceRow(
         val prompt: String,
         val chosen: String,
         val rejected: String
+    )
+
+    private data class CachedKtoStep(
+        val step: Int,
+        val rowIndices: List<Int>,
+        val refLogps: FloatArray,
+        val refKlLogps: FloatArray
     )
 
     private val resolver = application.contentResolver
@@ -1249,6 +1320,10 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    private fun readKtoRows(path: File): List<FeedbackJsonl.TrainingKtoRow> {
+        return FeedbackJsonl.toKtoRows(path.readLines())
+    }
+
     private fun resolveGlobalAdapterFile(config: NativeDemoConfig): File? {
         val path = config.globalAdapterPath?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return File(path).takeIf { it.isFile && it.length() > 0L }
@@ -1549,7 +1624,7 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         config: NativeDemoConfig,
         commandPreview: String
     ): NativeDemoRunStatus {
-        val rows = readPreferenceRows(trainFile)
+        val rows = readKtoRows(trainFile)
         val metricsFile = File(runDir, "metrics.ndjson")
         val reportFile = File(runDir, "report.json")
         val logFile = File(runDir, "train.log")
@@ -1557,22 +1632,38 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
         val adapterFile = File(runDir, "qwen_kto_lora_adapter.jsonl")
         val generationFile = File(runDir, "before_after_generation.json")
         val beforeAfterEvalFile = File(runDir, "before_after_eval.json")
-        if (rows.isEmpty()) {
-            logFile.writeText("[Error] No valid preference rows in ${trainFile.absolutePath}\n")
+        if (rows.size < 2) {
+            logFile.writeText(
+                "[Error] Canonical KTO requires at least two valid binary feedback rows " +
+                    "in ${trainFile.absolutePath}; found ${rows.size}\n"
+            )
+            return NativeDemoRunStatus.FAILED
+        }
+        if (config.steps < 1) {
+            logFile.writeText("[Error] Canonical KTO requires at least one training step\n")
             return NativeDemoRunStatus.FAILED
         }
 
         return try {
-            val batchSize = nativeKtoBatchSize(config)
+            val configuredBatchSize = nativeKtoBatchSize(config)
+            val batchSize = minOf(configuredBatchSize, rows.size)
+            require(batchSize >= 2) { "Canonical KTO batch size must be at least two" }
+            val desirableFeedbackRows = rows.count { it.desirable }
+            val undesirableFeedbackRows = rows.size - desirableFeedbackRows
             val startedMs = SystemClock.elapsedRealtime()
             var loadedGlobalAdapterPath: String? = null
             logFile.writeText(
                 buildString {
-                    appendLine("[Config] Android native C++ KTO run")
+                    appendLine("[Config] Android native C++ canonical binary KTO run")
                     appendLine("[Config] model_dir=$modelDir")
-                    appendLine("[Config] feedback_pairs=${rows.size} steps=${config.steps} batch=$batchSize seq_len=${config.seqLen}")
+                    appendLine(
+                        "[Config] binary_feedback_rows=${rows.size} " +
+                            "desirable=$desirableFeedbackRows undesirable=$undesirableFeedbackRows " +
+                            "steps=${config.steps} batch=$batchSize configured_batch=$configuredBatchSize " +
+                            "seq_len=${config.seqLen}"
+                    )
                     appendLine("[Config] command=$commandPreview")
-                    appendLine("[Config] reference_logps=base_model_cached")
+                    appendLine("[Config] reference_logps=base_model_exact_ordered_batch_cache")
                 }
             )
             metricsFile.writeText("")
@@ -1595,44 +1686,69 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 }
                 logFile.appendText("[Stage] before-training inference done\n")
 
-                val cachedRefChosen = FloatArray(rows.size)
-                val cachedRefRejected = FloatArray(rows.size)
+                val cachedSteps = ArrayList<CachedKtoStep>(config.steps)
                 var cachedValidResponseTokens = 0
-                val evalPairCount = minOf(10, rows.size)
-                logFile.appendText("[Stage] caching base-model reference logps for ${rows.size} preference pairs\n")
-                for (start in rows.indices step batchSize) {
-                    val end = minOf(start + batchSize, rows.size)
-                    val batchRows = rows.subList(start, end)
-                    val scores = tuner.scorePreferenceBatch(
+                var cachedValidKlResponseTokens = 0
+                var cachedReferenceRows = 0
+                logFile.appendText(
+                    "[Stage] caching base-model matched and KL logps for ${config.steps} " +
+                        "exact ordered training batches\n"
+                )
+                for (step in 1..config.steps) {
+                    val rowIndices = canonicalKtoBatchIndices(rows, configuredBatchSize, step)
+                    check(rowIndices.size == rowIndices.toSet().size) {
+                        "Canonical KTO batch $step contains duplicate rows"
+                    }
+                    val batchRows = rowIndices.map { rows[it] }
+                    val scores = tuner.scoreKtoBatch(
                         batchRows.map { it.prompt }.toTypedArray(),
-                        batchRows.map { it.chosen }.toTypedArray(),
-                        batchRows.map { it.rejected }.toTypedArray(),
+                        batchRows.map { it.response }.toTypedArray(),
+                        BooleanArray(batchRows.size) { batchRows[it].desirable },
                         config.seqLen,
                         true
                     )
+                    check(scores.responseLogps.size == batchRows.size) {
+                        "Reference matched-logp count did not match KTO batch $step"
+                    }
+                    check(scores.klResponseLogps.size == batchRows.size) {
+                        "Reference KL-logp count did not match KTO batch $step"
+                    }
                     cachedValidResponseTokens += scores.validResponseTokenCount
-                    for (i in batchRows.indices) {
-                        val rowIndex = start + i
-                        cachedRefChosen[rowIndex] = scores.chosenLogps[i]
-                        cachedRefRejected[rowIndex] = scores.rejectedLogps[i]
+                    cachedValidKlResponseTokens += scores.validKlResponseTokenCount
+                    cachedReferenceRows += batchRows.size
+                    for (batchPosition in batchRows.indices) {
+                        val rowIndex = rowIndices[batchPosition]
+                        val klCompletionRowIndex = rowIndices[
+                            (batchPosition - 1 + batchRows.size) % batchRows.size
+                        ]
                         referenceLogpsFile.appendText(
                             JSONObject()
+                                .put("cache_format", "canonical_kto_ordered_batch.v1")
+                                .put("step", step)
+                                .put("batch_position", batchPosition)
                                 .put("index", rowIndex)
-                                .put("ref_chosen_logp", scores.chosenLogps[i])
-                                .put("ref_rejected_logp", scores.rejectedLogps[i])
+                                .put("desirable", batchRows[batchPosition].desirable)
+                                .put("kl_completion_row_index", klCompletionRowIndex)
+                                .put("ref_logp", scores.responseLogps[batchPosition])
+                                .put("ref_kl_logp", scores.klResponseLogps[batchPosition])
+                                .put("sequence_length", config.seqLen)
+                                .put("append_eos_to_completion", true)
                                 .toString() + "\n"
                         )
                     }
-                    logFile.appendText("[Stage] cached reference logps $end/${rows.size}\n")
+                    cachedSteps += CachedKtoStep(
+                        step = step,
+                        rowIndices = rowIndices,
+                        refLogps = scores.responseLogps,
+                        refKlLogps = scores.klResponseLogps
+                    )
+                    logFile.appendText(
+                        "[Stage] cached reference batch $step/${config.steps} " +
+                            "rows=${rowIndices.joinToString(",")} " +
+                            "matched_tokens=${scores.validResponseTokenCount} " +
+                            "kl_tokens=${scores.validKlResponseTokenCount}\n"
+                    )
                 }
-                val beforeEvalSummary = summarizePreferenceScores(
-                    cachedRefChosen.copyOfRange(0, evalPairCount),
-                    cachedRefRejected.copyOfRange(0, evalPairCount)
-                )
-                logFile.appendText(
-                    "[Eval before] pairs=${beforeEvalSummary.pairCount} " +
-                        "accuracy=${beforeEvalSummary.accuracy} margin=${beforeEvalSummary.meanMargin}\n"
-                )
 
                 logFile.appendText("[Stage] initializing LoRA\n")
                 tuner.initLora(
@@ -1672,22 +1788,23 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 var first: MobileFineTuner.KtoStepResult? = null
                 var last: MobileFineTuner.KtoStepResult? = null
                 var peakTrainRssMb: Double? = null
-                for (step in 1..config.steps) {
-                    val batchIndices = (0 until batchSize).map { (step - 1 + it) % rows.size }
-                    val batch = batchIndices.map { rows[it] }
-                    val refChosen = FloatArray(batch.size) { cachedRefChosen[batchIndices[it]] }
-                    val refRejected = FloatArray(batch.size) { cachedRefRejected[batchIndices[it]] }
+                for (cachedStep in cachedSteps) {
+                    val step = cachedStep.step
+                    val batch = cachedStep.rowIndices.map { rows[it] }
                     val stepStartMs = SystemClock.elapsedRealtime()
                     logFile.appendText("[Stage] step $step/${config.steps} start\n")
-                    val result = tuner.trainKtoPreferenceBatch(
+                    val result = tuner.trainKtoBatch(
                         batch.map { it.prompt }.toTypedArray(),
-                        batch.map { it.chosen }.toTypedArray(),
-                        batch.map { it.rejected }.toTypedArray(),
-                        refChosen,
-                        refRejected,
+                        batch.map { it.response }.toTypedArray(),
+                        BooleanArray(batch.size) { batch[it].desirable },
+                        cachedStep.refLogps,
+                        cachedStep.refKlLogps,
                         config.seqLen,
                         true
                     )
+                    check(result.sampleCount == batch.size) {
+                        "Native KTO sample count ${result.sampleCount} did not match batch size ${batch.size}"
+                    }
                     val elapsedMs = SystemClock.elapsedRealtime() - stepStartMs
                     val rssMb = sampleSelfRssMb()
                     peakTrainRssMb = NativeKtoMetrics.updatePeakRssMb(peakTrainRssMb, rssMb)
@@ -1698,17 +1815,23 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     val row = NativeKtoMetrics.stepJson(
                         step = step,
                         batchSize = batchSize,
-                        trainSamples = rows.size * 2,
-                        feedbackPairs = rows.size,
+                        binaryFeedbackRows = rows.size,
                         trainableParams = result.trainableTensorCount,
                         loss = result.loss,
+                        accumulatedLoss = result.accumulatedLoss,
                         rewardAccuracy = result.rewardAccuracy,
                         rewardMargin = result.rewardMargin,
                         desirableReward = result.desirableReward,
                         undesirableReward = result.undesirableReward,
+                        klEstimate = result.klEstimate,
                         sampleCount = result.sampleCount,
-                        pairCount = result.pairCount,
+                        desirableCount = result.desirableCount,
+                        undesirableCount = result.undesirableCount,
                         validResponseTokens = result.validResponseTokenCount,
+                        validKlResponseTokens = result.validKlResponseTokenCount,
+                        accumulationStep = result.accumulationStep,
+                        gradientAccumulationSteps = result.gradientAccumulationSteps,
+                        optimizerStep = result.optimizerStep,
                         elapsedMs = elapsedMs,
                         rssMb = rssMb
                     )
@@ -1716,7 +1839,9 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     logFile.appendText(
                         "[step $step/${config.steps}] loss=${result.loss} " +
                             "reward_acc=${result.rewardAccuracy} reward_margin=${result.rewardMargin} " +
-                            "samples=${result.sampleCount} time_ms=$elapsedMs" +
+                            "kl_estimate=${result.klEstimate} samples=${result.sampleCount} " +
+                            "matched_tokens=${result.validResponseTokenCount} " +
+                            "kl_tokens=${result.validKlResponseTokenCount} time_ms=$elapsedMs" +
                             (rssMb?.let { " rss_mb=${formatDemoValue("%.1f", it)}" } ?: "") +
                             "\n"
                     )
@@ -1736,26 +1861,32 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                 val finalResult = last ?: error("KTO trainer produced no steps")
                 val trendAccuracyDelta = finalResult.rewardAccuracy.toDouble() - firstResult.rewardAccuracy.toDouble()
                 val trendMarginDelta = finalResult.rewardMargin.toDouble() - firstResult.rewardMargin.toDouble()
+                val trendKlDelta = finalResult.klEstimate.toDouble() - firstResult.klEstimate.toDouble()
                 beforeAfterEvalFile.writeText(
                     JSONObject()
-                        .put("eval_pairs", evalPairCount)
-                        .put("method", "reference_before_plus_training_reward_trend")
-                        .put("reference_before", JSONObject()
-                            .put("accuracy", beforeEvalSummary.accuracy)
-                            .put("mean_margin", beforeEvalSummary.meanMargin)
+                        .put("method", "canonical_kto_training_step_trend")
+                        .put("held_out_eval", false)
+                        .put("binary_feedback_rows_per_step", batchSize)
+                        .put("reference_cache", JSONObject()
+                            .put("ordered_batches", cachedSteps.size)
+                            .put("matched_valid_response_tokens", cachedValidResponseTokens)
+                            .put("kl_valid_response_tokens", cachedValidKlResponseTokens)
                         )
                         .put("train_reward_trend", JSONObject()
                             .put("first_step", JSONObject()
                                 .put("accuracy", firstResult.rewardAccuracy)
                                 .put("mean_margin", firstResult.rewardMargin)
+                                .put("kl_estimate", firstResult.klEstimate)
                             )
                             .put("final_step", JSONObject()
                                 .put("accuracy", finalResult.rewardAccuracy)
                                 .put("mean_margin", finalResult.rewardMargin)
+                                .put("kl_estimate", finalResult.klEstimate)
                             )
                             .put("delta", JSONObject()
                                 .put("accuracy", trendAccuracyDelta)
                                 .put("mean_margin", trendMarginDelta)
+                                .put("kl_estimate", trendKlDelta)
                             )
                         )
                         .toString(2) + "\n"
@@ -1779,25 +1910,31 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     .put("status", "ok")
                     .put("backend", "android_native_cpp")
                     .put("objective", "kto")
+                    .put("kto_semantics", "canonical_binary_feedback")
                     .put("model_dir", modelDir)
-                    .put("train_samples", rows.size * 2)
-                    .put("feedback_pairs", rows.size)
+                    // Compatibility alias: train_samples counts binary rows.
+                    .put("train_samples", rows.size)
+                    .put("binary_feedback_rows", rows.size)
+                    .put("desirable_feedback_rows", desirableFeedbackRows)
+                    .put("undesirable_feedback_rows", undesirableFeedbackRows)
                     .put("max_steps", config.steps)
                     .put("batch_size", batchSize)
+                    .put("configured_batch_size", configuredBatchSize)
                     .put("beta", 0.1)
                     .put("lora_rank", maxOf(2, config.rank))
                     .put("lora_alpha", maxOf(4, config.alpha))
                     .put("loaded_global_adapter_path", loadedGlobalAdapterPath ?: JSONObject.NULL)
                     .put("reference_logps_path", referenceLogpsFile.absolutePath)
-                    .put("cached_reference_pairs", rows.size)
+                    .put("reference_cache_semantics", "exact_ordered_batch_matched_and_rotated_kl")
+                    .put("cached_reference_batches", cachedSteps.size)
+                    .put("cached_reference_rows", cachedReferenceRows)
                     .put("cached_reference_valid_response_tokens", cachedValidResponseTokens)
+                    .put("cached_reference_valid_kl_response_tokens", cachedValidKlResponseTokens)
                     .put("lora_adapter_path", adapterFile.absolutePath)
                     .put("before_after_generation_path", generationFile.absolutePath)
                     .put("before_after_eval_path", beforeAfterEvalFile.absolutePath)
-                    .put("before_after_eval_method", "reference_before_plus_training_reward_trend")
-                    .put("eval_pairs", evalPairCount)
-                    .put("eval_accuracy_before", beforeEvalSummary.accuracy)
-                    .put("eval_margin_before", beforeEvalSummary.meanMargin)
+                    .put("before_after_eval_method", "canonical_kto_training_step_trend")
+                    .put("held_out_eval", false)
                     .put("max_train_rss_mb", peakTrainRssMb ?: JSONObject.NULL)
                     .put("trend_accuracy_before", firstResult.rewardAccuracy)
                     .put("trend_accuracy_after", finalResult.rewardAccuracy)
@@ -1805,14 +1942,26 @@ class ExperimentViewModel(application: Application) : AndroidViewModel(applicati
                     .put("trend_margin_before", firstResult.rewardMargin)
                     .put("trend_margin_after", finalResult.rewardMargin)
                     .put("trend_margin_delta", trendMarginDelta)
+                    .put("trend_kl_before", firstResult.klEstimate)
+                    .put("trend_kl_after", finalResult.klEstimate)
+                    .put("trend_kl_delta", trendKlDelta)
                     .put("last_train_metrics", JSONObject()
                         .put("loss", finalResult.loss)
+                        .put("accumulated_loss", finalResult.accumulatedLoss)
                         .put("reward_accuracy", finalResult.rewardAccuracy)
                         .put("reward_margin", finalResult.rewardMargin)
                         .put("desirable_reward", finalResult.desirableReward)
                         .put("undesirable_reward", finalResult.undesirableReward)
-                        .put("policy_trainable_params", finalResult.trainableTensorCount)
+                        .put("kl_estimate", finalResult.klEstimate)
+                        .put("trainable_tensor_count", finalResult.trainableTensorCount)
                         .put("sample_count", finalResult.sampleCount)
+                        .put("desirable_count", finalResult.desirableCount)
+                        .put("undesirable_count", finalResult.undesirableCount)
+                        .put("valid_response_tokens", finalResult.validResponseTokenCount)
+                        .put("valid_kl_response_tokens", finalResult.validKlResponseTokenCount)
+                        .put("accumulation_step", finalResult.accumulationStep)
+                        .put("gradient_accumulation_steps", finalResult.gradientAccumulationSteps)
+                        .put("optimizer_step", finalResult.optimizerStep)
                     )
                     .put("total_elapsed_ms", totalMs)
                 reportFile.writeText(report.toString(2) + "\n")

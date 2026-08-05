@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -297,6 +298,75 @@ void test_qwen_lora_adapter_jsonl_round_trips_trainable_weights() {
     }
 }
 
+void test_lora_adapter_jsonl_load_is_transactional() {
+    const fs::path root = make_case_dir("transactional_lora_adapter");
+    write_file(root / "config.json",
+               R"({"model_type":"gpt2","vocab_size":16,"n_positions":8,"n_embd":8,"n_layer":1,"n_head":2})");
+
+    auto source = ops::AutoModelForCausalLM::from_pretrained(root.string(), no_weight_load());
+    source->init_lora(tiny_lora());
+    for (const auto& kv : source->named_trainable_parameters()) {
+        float* data = kv.second->data<float>();
+        for (int64_t i = 0; i < kv.second->numel(); ++i) {
+            data[i] = 0.5f + static_cast<float>(i) * 0.01f;
+        }
+    }
+    const fs::path complete_path = root / "complete.jsonl";
+    source->save_lora_adapter_jsonl(complete_path.string());
+
+    std::ifstream complete(complete_path);
+    require(complete.is_open(), "failed to open saved adapter fixture");
+    std::string format_line;
+    std::string first_tensor_line;
+    require(static_cast<bool>(std::getline(complete, format_line)), "missing adapter format line");
+    require(static_cast<bool>(std::getline(complete, first_tensor_line)), "missing adapter tensor line");
+
+    const fs::path incomplete_path = root / "incomplete.jsonl";
+    write_file(incomplete_path, format_line + "\n" + first_tensor_line + "\n");
+
+    auto target = ops::AutoModelForCausalLM::from_pretrained(root.string(), no_weight_load());
+    target->init_lora(tiny_lora());
+    std::vector<std::vector<float>> before;
+    for (const auto& kv : target->named_trainable_parameters()) {
+        float* data = kv.second->data<float>();
+        std::vector<float> snapshot(static_cast<std::size_t>(kv.second->numel()));
+        for (int64_t i = 0; i < kv.second->numel(); ++i) {
+            data[i] = -0.75f - static_cast<float>(i) * 0.001f;
+            snapshot[static_cast<std::size_t>(i)] = data[i];
+        }
+        before.push_back(std::move(snapshot));
+    }
+
+    bool threw = false;
+    try {
+        target->load_lora_adapter_jsonl(incomplete_path.string());
+    } catch (const std::runtime_error& e) {
+        threw = std::string(e.what()).find("incomplete") != std::string::npos;
+    }
+    require(threw, "incomplete adapter should be rejected");
+
+    const auto after = target->named_trainable_parameters();
+    require(after.size() == before.size(), "transactional adapter parameter count mismatch");
+    for (std::size_t p = 0; p < after.size(); ++p) {
+        const float* data = after[p].second->data<float>();
+        for (int64_t i = 0; i < after[p].second->numel(); ++i) {
+            require(data[i] == before[p][static_cast<std::size_t>(i)],
+                    "failed adapter load partially modified live parameters");
+        }
+    }
+
+    const fs::path duplicate_path = root / "duplicate.jsonl";
+    write_file(duplicate_path,
+               format_line + "\n" + first_tensor_line + "\n" + first_tensor_line + "\n");
+    threw = false;
+    try {
+        target->load_lora_adapter_jsonl(duplicate_path.string());
+    } catch (const std::runtime_error& e) {
+        threw = std::string(e.what()).find("duplicate") != std::string::npos;
+    }
+    require(threw, "duplicate adapter tensor should be rejected");
+}
+
 void test_llama_auto_trainer_step_with_untied_head() {
     const fs::path root = make_case_dir("llama");
     write_file(root / "config.json",
@@ -429,6 +499,7 @@ int main() {
     test_gemma_auto_lora_dispatch();
     test_qwen_auto_lora_dispatch();
     test_qwen_lora_adapter_jsonl_round_trips_trainable_weights();
+    test_lora_adapter_jsonl_load_is_transactional();
     test_llama_auto_trainer_step_with_untied_head();
     test_llama_key_mapper_respects_bias_and_lm_head();
     test_llama_rejects_unsupported_rope_scaling();

@@ -49,12 +49,19 @@ files through normal filesystem paths.
 
 ## Supported Runner Path
 
-The app calls the Android SDK in this order:
+For SFT, the app calls the Android SDK in this order:
 
 1. `MobileFineTuner.open(modelDir, loadWeights)`
 2. `initLora(MobileFineTuner.LoraConfig.attentionQkvo())`
 3. `createTrainer(...)`
 4. `trainTextBatch(...)`
+
+For canonical KTO, it first converts input JSONL to binary
+`prompt/response/desirable` rows. Before LoRA initialization it calls
+`scoreKtoBatch(...)` for each exact scheduled batch, caching both matched and
+rotated KL reference scores. It then initializes LoRA, creates `KtoTrainer`,
+and calls `trainKtoBatch(...)` with the same row order. DPO uses the analogous
+pair-scoring and `trainPreferenceBatch(...)` path.
 
 `batchSize` controls how many text rows are tokenized into each native training
 batch. `gradientAccumulationSteps` controls how many runner steps accumulate

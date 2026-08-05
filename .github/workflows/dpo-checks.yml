@@ -1,4 +1,4 @@
-name: DPO Checks
+name: DPO/KTO Checks
 
 on:
   pull_request:
@@ -24,7 +24,7 @@ on:
       - ".github/workflows/dpo-checks.yml"
 
 jobs:
-  dpo-sanity:
+  preference-sanity:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -41,8 +41,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install torch transformers peft
 
-      - name: Run DPO unit tests
-        run: PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_dpo_utils tests.test_qa_preference_tools
+      - name: Run DPO/KTO unit tests
+        run: >-
+          PYTHONDONTWRITEBYTECODE=1 python -m unittest
+          tests.test_dpo_utils
+          tests.test_qa_preference_tools
+          tests.test_federated_tools
 
       - name: Validate FedRL DPO/KTO datasets
         run: PYTHONPATH=. python scripts/prepare_fedrl_datasets.py

@@ -20,4 +20,4 @@ cd "$ANDROID_DIR"
 ./gradlew :mft-sdk:publishReleasePublicationToLocalReleaseRepository "$@"
 
 echo "[Android SDK] Maven repo: $ANDROID_DIR/mft-sdk/build/repo"
-echo "[Android SDK] Dependency: com.mobilefinetuner:mobilefinetuner-android:${MFT_SDK_VERSION:-0.1.0}"
+echo "[Android SDK] Dependency: com.mobilefinetuner:mobilefinetuner-android:${MFT_SDK_VERSION:-0.2.0}"

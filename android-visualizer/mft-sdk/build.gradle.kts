@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "com.mobilefinetuner"
-version = providers.gradleProperty("MFT_SDK_VERSION").orElse("0.1.0").get()
+version = providers.gradleProperty("MFT_SDK_VERSION").orElse("0.2.0").get()
 
 android {
     namespace = "com.mobilefinetuner.sdk"

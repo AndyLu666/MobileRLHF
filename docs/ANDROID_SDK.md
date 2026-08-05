@@ -66,7 +66,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.mobilefinetuner:mobilefinetuner-android:0.1.0")
+    implementation("com.mobilefinetuner:mobilefinetuner-android:0.2.0")
 }
 ```
 
@@ -172,12 +172,57 @@ the mobile-friendly path because it trains only the policy adapters on device.
 The C++ API also supports an in-process reference model for parity experiments,
 but that doubles model residency and is usually too expensive for phone runs.
 
+Canonical KTO uses independent binary feedback rows rather than preference
+pairs. Score each exact ordered batch on the base/reference model before LoRA
+training, then reuse both returned score arrays with the same order and batch
+configuration:
+
+```java
+try (MobileFineTuner mf = MobileFineTuner.open(modelDir, true)) {
+    String[] prompts = {"Recovery?", "Training today?"};
+    String[] completions = {
+            "Take an easy walk.",
+            "Ignore fatigue and sprint."
+    };
+    boolean[] desirable = {true, false};
+
+    MobileFineTuner.KtoScoreResult reference = mf.scoreKtoBatch(
+            prompts,
+            completions,
+            desirable,
+            64,
+            true
+    );
+
+    mf.initLora(MobileFineTuner.LoraConfig.attentionQkvo());
+    mf.createKtoTrainer(MobileFineTuner.KtoTrainerConfig.defaults());
+    MobileFineTuner.KtoStepResult result = mf.trainKtoBatch(
+            prompts,
+            completions,
+            desirable,
+            reference.responseLogps,
+            reference.klResponseLogps,
+            64,
+            true
+    );
+
+    float loss = result.loss;
+    float kl = result.klEstimate;
+}
+```
+
+A KTO batch requires at least two rows. `scoreKtoBatch` constructs the
+mismatched KL branch by rotating completions within the ordered batch, so
+`responseLogps` and `klResponseLogps` cannot be reused after reordering rows or
+changing sequence/tokenizer/EOS settings. `trainKtoPreferenceBatch` remains as
+a deprecated legacy approximation for source compatibility only.
+
 Call order:
 
 1. `MobileFineTuner.open(modelDir, loadWeights)`
 2. `initLora(...)`
-3. `createTrainer(...)` for SFT or `createDpoTrainer(...)` for DPO
-4. `trainStep(...)`, `trainTextBatch(...)`, or `trainPreferenceBatch(...)`
+3. `createTrainer(...)`, `createDpoTrainer(...)`, or `createKtoTrainer(...)`
+4. Call the matching SFT, DPO, or canonical KTO train method
 5. `close()`
 
 `inputIds`, `attentionMask`, and `labels` are flattened row-major arrays with
@@ -209,8 +254,8 @@ cd android-visualizer
 
 The smoke test does not require external model weights. It creates a small
 temporary HuggingFace-style config in app-private storage, initializes LoRA, and
-executes one native `AutoTrainer` step and one cached-reference `DPOTrainer`
-step.
+executes one native `AutoTrainer` step, one cached-reference `DPOTrainer` step,
+and one canonical cached-reference `KTOTrainer` step.
 
 When real model assets are staged on the device, the same instrumentation suite
 can exercise the SDK open/init/train-text path for current families. Provide one
@@ -287,7 +332,7 @@ Java MobileFineTuner
 libmobilefinetuner_jni.so
         |
         v
-ops::AutoModelForCausalLM + ops::AutoTrainer / ops::DPOTrainer
+ops::AutoModelForCausalLM + ops::AutoTrainer / ops::DPOTrainer / ops::KTOTrainer
 ```
 
 The Android layer does not duplicate model math. All forward, loss, backward,
@@ -297,9 +342,8 @@ core.
 ## Current Limitations
 
 - `arm64-v8a` only.
-- Java API currently exposes the install self-test, one-step tensor LoRA
-  training, and one-step text-batch LoRA training, not a full dataset loop or
-  checkpoint manager.
+- Java API exposes one-step SFT, DPO, and canonical KTO training primitives,
+  not a general dataset scheduler or checkpoint manager.
 - Model files are loaded from normal filesystem paths; the SDK does not load
   directly from compressed APK assets.
 - Full-weight phone training still depends on device memory limits and the

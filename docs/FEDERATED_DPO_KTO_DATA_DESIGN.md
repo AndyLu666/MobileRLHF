@@ -10,7 +10,7 @@ We run two independent federated preference objectives:
 | Objective | Local trainer | Local input schema | Adapter artifact |
 | --- | --- | --- | --- |
 | DPO | `createDpoTrainer()` + `trainPreferenceBatch()` | `prompt/chosen/rejected` | `qwen_dpo_lora_adapter.jsonl` |
-| KTO | `createKtoTrainer()` + `trainKtoPreferenceBatch()` | DPO pairs expanded to binary desirable/undesirable rows internally | `qwen_kto_lora_adapter.jsonl` |
+| KTO | `createKtoTrainer()` + `trainKtoBatch()` | unpaired `prompt/response/label`; DPO pairs are explicitly unpaired by the data adapter | `qwen_kto_lora_adapter.jsonl` |
 
 ## Dataset Spec
 
@@ -39,11 +39,16 @@ Prepared files:
 | `fedrl_health` | 24 / 6 pairs | 48 / 12 binary rows |
 | `fedrl_hf_fitness` | 42 / 12 pairs | 84 / 24 binary rows |
 
-Android runtime input is the DPO-pair form. For `OBJECTIVE=kto`, the Android
-runner reads `prompt/chosen/rejected` rows and expands each pair internally into
-desirable and undesirable KTO samples before calling `trainKtoPreferenceBatch()`.
-The tracked `*_kto_*.jsonl` files are validation/reference assets used by the
-Python smoke path and dataset checks.
+Android runtime input may be either DPO-pair or KTO-binary JSONL. For
+`OBJECTIVE=kto`, the data adapter keeps each `prompt/response/label` payload and
+label unchanged and explicitly unpairs each `prompt/chosen/rejected` row into
+one desirable and one undesirable sample. Like TRL's unpairing utility,
+conversion writes the
+desirable block before the undesirable block; the Android batch planner then
+selects balanced, deterministic slices and prefers rotations across distinct
+prompts. The runner calls canonical `trainKtoBatch()` and caches both matched
+and rotated KL-branch reference scores for the exact batch order. The tracked
+`*_kto_*.jsonl` files are also used by the Python smoke path and dataset checks.
 
 Android assets:
 
@@ -67,13 +72,13 @@ PreferenceDatasetSpec(
     displayName = "Private on-phone Qwen health preference feedback",
     kind = PreferenceDatasetKind.APP_AB_FEEDBACK,
     jsonlPath = "files/mft_runs/<run>/inference_feedback.jsonl",
-    schema = "jsonl: prompt/chosen/rejected",
+    schema = "mixed jsonl: prompt/chosen/rejected or prompt/response/label",
     privateOnDevice = true,
     promptField = "prompt",
     chosenField = "chosen",
     rejectedField = "rejected",
-    labelField = null,
-    sourceDescription = "A/B feedback collected locally in the Android app"
+    labelField = "label",
+    sourceDescription = "A/B and thumbs feedback collected locally in the Android app"
 )
 ```
 
@@ -94,7 +99,8 @@ PreferenceDatasetSpec(
 Privacy rule:
 
 - Raw health sensor streams stay on device.
-- Local prompts and chosen/rejected text should be treated as private experiment data.
+- Local prompts, responses, labels, and chosen/rejected text should be treated
+  as private experiment data.
 - Federated aggregation uploads only LoRA adapter weights plus run metadata.
 
 ## Model Spec
@@ -213,7 +219,7 @@ export FEDRL_SERIALS="10.203.22.73:5555 10.203.34.125:5556 10.203.4.60:5556"
 ```kotlin
 FederatedAggregationSpec(
     strategy = "fedavg_jsonl_v1",
-    weightKey = "feedback_pairs",
+    weightKey = "feedback_pairs (DPO) / binary_feedback_rows (KTO)",
     uploadedArtifacts = listOf(
         "qwen_dpo_lora_adapter.jsonl or qwen_kto_lora_adapter.jsonl",
         "report.json"

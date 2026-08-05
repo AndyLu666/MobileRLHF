@@ -32,4 +32,32 @@ PreferenceLogps score_preference_logps(AutoModelForCausalLM& model,
     return scores;
 }
 
+KTOLogps score_kto_logps(AutoModelForCausalLM& model,
+                         const KTOBatch& batch) {
+    if (batch.batch_size < 2) {
+        throw std::runtime_error(
+            "score_kto_logps: KTO batches require at least two samples");
+    }
+    if (!batch.input_ids || !batch.attention_mask || !batch.response_mask ||
+        !batch.kl_input_ids || !batch.kl_attention_mask ||
+        !batch.kl_response_mask) {
+        throw std::runtime_error("score_kto_logps: incomplete KTO batch tensors");
+    }
+
+    const TensorPtr lm_head = model.lm_head_weight_for_loss();
+    const TensorPtr hidden =
+        model.forward_hidden(batch.input_ids, batch.attention_mask);
+    const TensorPtr kl_hidden =
+        model.forward_hidden(batch.kl_input_ids, batch.kl_attention_mask);
+
+    KTOLogps scores;
+    scores.response_logps = sequence_logprob_masked_from_hidden(
+        hidden, lm_head, batch.input_ids, batch.response_mask);
+    scores.kl_response_logps = sequence_logprob_masked_from_hidden(
+        kl_hidden, lm_head, batch.kl_input_ids, batch.kl_response_mask);
+    scores.valid_response_token_count = batch.valid_response_token_count;
+    scores.valid_kl_response_token_count = batch.valid_kl_response_token_count;
+    return scores;
+}
+
 }  // namespace ops

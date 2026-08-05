@@ -96,6 +96,65 @@ public final class MobileFineTunerDeviceSmokeTest {
     }
 
     @Test
+    public void canonicalKtoScoresMatchedAndRotatedBranchesThenTrains() throws IOException {
+        Context context = ApplicationProvider.getApplicationContext();
+        File modelDir = new File(context.getFilesDir(), "mft_sdk_kto_batch_gpt2");
+        deleteRecursively(modelDir);
+        createTinyGpt2TextModel(modelDir);
+
+        try (MobileFineTuner mf = MobileFineTuner.open(modelDir.getAbsolutePath(), false)) {
+            String[] prompts = new String[]{"H", "H"};
+            String[] completions = new String[]{"e", "H"};
+            boolean[] desirable = new boolean[]{true, false};
+
+            MobileFineTuner.KtoScoreResult reference =
+                    mf.scoreKtoBatch(prompts, completions, desirable, 4);
+            assertTrue(reference.responseLogps.length == 2);
+            assertTrue(reference.klResponseLogps.length == 2);
+            assertTrue(reference.validResponseTokenCount > 0);
+            assertTrue(reference.validKlResponseTokenCount > 0);
+            for (float value : reference.responseLogps) {
+                assertTrue(Float.isFinite(value));
+            }
+            for (float value : reference.klResponseLogps) {
+                assertTrue(Float.isFinite(value));
+            }
+
+            mf.initLora(new MobileFineTuner.LoraConfig(
+                    2,
+                    4.0f,
+                    0.0f,
+                    7L,
+                    new String[]{"q_proj", "k_proj", "v_proj", "o_proj"}
+            ));
+            mf.createKtoTrainer(new MobileFineTuner.KtoTrainerConfig(
+                    1e-3f,
+                    0.0f,
+                    1.0f,
+                    0.1f
+            ));
+            MobileFineTuner.KtoStepResult result = mf.trainKtoBatch(
+                    prompts,
+                    completions,
+                    desirable,
+                    reference.responseLogps,
+                    reference.klResponseLogps,
+                    4
+            );
+            assertTrue(Float.isFinite(result.loss));
+            assertTrue(Float.isFinite(result.klEstimate));
+            assertTrue(result.klEstimate >= 0.0f);
+            assertTrue(result.trainableTensorCount > 0);
+            assertTrue(result.pairCount == 0);
+            assertTrue(result.sampleCount == 2);
+            assertTrue(result.desirableCount == 1);
+            assertTrue(result.undesirableCount == 1);
+            assertTrue(result.validResponseTokenCount > 0);
+            assertTrue(result.validKlResponseTokenCount > 0);
+        }
+    }
+
+    @Test
     public void optionalRealAssetTextBatchSmoke() {
         Bundle args = InstrumentationRegistry.getArguments();
         int executed = 0;

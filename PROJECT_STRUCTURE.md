@@ -7,7 +7,7 @@ kept outside the Git-tracked tree.
 | Path | Purpose |
 | --- | --- |
 | `android-visualizer/` | Android app, SDK/AAR module, JNI integration, UI, and device tests. |
-| `operator/` | Native C++ MobileFineTuner training core. |
+| `operator/` | Native training core plus stable C ABI and C++ convenience API. |
 | `examples/` | Native model-family examples and CLI entrypoints. |
 | `pytorch_alignment/` | Lightweight Python reference checks for DPO/KTO data and loss behavior. |
 | `scripts/android/` | adb helpers for real-phone federation. |
@@ -18,6 +18,9 @@ kept outside the Git-tracked tree.
 | `third_party/` | Small vendored native dependencies needed by the Android/native build. |
 
 ## Maintained MobileRLHF Flow
+
+Native consumers can build/install `operator/` and use the C API documented in
+`docs/C_API.md` independently of the Android/federated workflow.
 
 1. Validate bundled preference assets:
 

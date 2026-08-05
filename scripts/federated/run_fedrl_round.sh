@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")"/../.. && pwd)"
 
 OBJECTIVE="${OBJECTIVE:-dpo}"
 ROUND="${ROUND:-001}"
-WEIGHT_KEY="${WEIGHT_KEY:-feedback_pairs}"
+WEIGHT_KEY="${WEIGHT_KEY:-auto}"
 OUT_ROOT="${OUT_ROOT:-$ROOT/runs/fedrl_round_${ROUND}_${OBJECTIVE}}"
 
 case "$OBJECTIVE" in

@@ -91,11 +91,13 @@ def summarize(round_dir: Path) -> list[dict[str, Any]]:
             "status": report.get("status", ""),
             "objective": report.get("objective", ""),
             "feedback_pairs": report.get("feedback_pairs", ""),
+            "binary_feedback_rows": report.get("binary_feedback_rows", ""),
             "max_steps": report.get("max_steps", ""),
             "batch_size": report.get("batch_size", ""),
             "lora_rank": report.get("lora_rank", ""),
             "lora_alpha": report.get("lora_alpha", ""),
             "cached_reference_pairs": report.get("cached_reference_pairs", ""),
+            "cached_reference_batches": report.get("cached_reference_batches", ""),
             "total_elapsed_ms": report.get("total_elapsed_ms", ""),
             "max_train_rss_mb": report.get("max_train_rss_mb", ""),
             "metrics_rows": count_lines(metric_path),
@@ -103,6 +105,7 @@ def summarize(round_dir: Path) -> list[dict[str, Any]]:
             "last_loss": metric.get("loss", ""),
             "last_reward_accuracy": metric.get("reward_accuracy", ""),
             "last_reward_margin": metric.get("reward_margin", ""),
+            "last_kl_estimate": metric.get("kl_estimate", ""),
         }
         row.update(monitor_summary(monitor_path))
         rows.append(row)

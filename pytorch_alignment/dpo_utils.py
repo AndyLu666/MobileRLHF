@@ -68,13 +68,25 @@ class BinaryFeedbackDataset(Dataset):
                     rec = json.loads(line)
                     prompt = rec["prompt"]
                     response = rec["response"]
-                    label = rec.get("label", rec.get("desirable"))
+                    if "label" not in rec and "desirable" not in rec:
+                        continue
+                    label = parse_desirable_label(
+                        rec.get("label", rec.get("desirable"))
+                    )
                     pair = self._build_pair(prompt, response)
                     if pair["response_mask"].sum().item() == 0:
                         continue
                     self.samples.append({
                         **pair,
-                        "label": torch.tensor(1.0 if is_desirable_label(label) else -1.0, dtype=torch.float32),
+                        "label": torch.tensor(1.0 if label else -1.0, dtype=torch.float32),
+                        "prompt_ids": torch.tensor(
+                            self.tokenizer.encode(prompt, add_special_tokens=False), dtype=torch.long
+                        ),
+                        "completion_ids": torch.tensor(
+                            self.tokenizer.encode(response, add_special_tokens=False), dtype=torch.long
+                        ),
+                        "pad_token_id": int(self.tokenizer.pad_token_id),
+                        "sequence_length": int(self.seq_len),
                     })
                 except Exception:
                     continue
@@ -124,6 +136,33 @@ def is_desirable_label(label) -> bool:
     return bool(label)
 
 
+def parse_desirable_label(label) -> bool:
+    """Parse a binary KTO label without silently relabeling malformed data."""
+    if isinstance(label, bool):
+        return label
+    if isinstance(label, (int, float)) and not isinstance(label, bool):
+        if label == 1:
+            return True
+        if label == 0:
+            return False
+        raise ValueError("numeric KTO labels must be exactly 0 or 1")
+    if isinstance(label, str):
+        normalized = label.strip().lower()
+        positives = {
+            "1", "true", "yes", "desirable", "positive", "up", "like",
+            "chosen", "correct", "accepted", "good",
+        }
+        negatives = {
+            "0", "false", "no", "undesirable", "negative", "down", "dislike",
+            "rejected", "incorrect", "unaccepted", "bad", "unchosen",
+        }
+        if normalized in positives:
+            return True
+        if normalized in negatives:
+            return False
+    raise ValueError("KTO label is not a recognized binary value")
+
+
 def dpo_collate_batch(batch: List[dict]) -> Dict[str, torch.Tensor]:
     out = {}
     for branch in ["chosen", "rejected"]:
@@ -133,11 +172,58 @@ def dpo_collate_batch(batch: List[dict]) -> Dict[str, torch.Tensor]:
 
 
 def binary_feedback_collate_batch(batch: List[dict]) -> Dict[str, torch.Tensor]:
+    if len(batch) < 2:
+        raise ValueError("canonical KTO requires at least two rows to build mismatched KL examples")
+    sequence_lengths = {int(x["sequence_length"]) for x in batch}
+    pad_token_ids = {int(x["pad_token_id"]) for x in batch}
+    if len(sequence_lengths) != 1 or len(pad_token_ids) != 1:
+        raise ValueError("KTO rows in one batch must use the same sequence length and pad token")
+
+    sequence_length = sequence_lengths.pop()
+    pad_token_id = pad_token_ids.pop()
+    rotated_completions = [batch[-1]["completion_ids"]] + [x["completion_ids"] for x in batch[:-1]]
+    kl_input_ids = []
+    kl_attention_masks = []
+    kl_response_masks = []
+    for sample, completion_ids in zip(batch, rotated_completions):
+        prompt_ids = sample["prompt_ids"]
+        combined = torch.cat((prompt_ids, completion_ids), dim=0)[:sequence_length]
+        prompt_kept = min(int(prompt_ids.numel()), sequence_length)
+        completion_kept = max(0, int(combined.numel()) - prompt_kept)
+        if completion_kept == 0:
+            raise ValueError("KTO KL mismatch row has no response token after truncation")
+
+        response_mask = torch.cat(
+            (
+                torch.zeros(prompt_kept, dtype=torch.long),
+                torch.ones(completion_kept, dtype=torch.long),
+            ),
+            dim=0,
+        )
+        attention_mask = torch.ones(int(combined.numel()), dtype=torch.long)
+        pad_count = sequence_length - int(combined.numel())
+        if pad_count > 0:
+            combined = torch.cat(
+                (combined, torch.full((pad_count,), pad_token_id, dtype=torch.long)), dim=0
+            )
+            attention_mask = torch.cat(
+                (attention_mask, torch.zeros(pad_count, dtype=torch.long)), dim=0
+            )
+            response_mask = torch.cat(
+                (response_mask, torch.zeros(pad_count, dtype=torch.long)), dim=0
+            )
+        kl_input_ids.append(combined)
+        kl_attention_masks.append(attention_mask)
+        kl_response_masks.append(response_mask)
+
     return {
         "input_ids": torch.stack([x["input_ids"] for x in batch], dim=0),
         "attention_mask": torch.stack([x["attention_mask"] for x in batch], dim=0),
         "response_mask": torch.stack([x["response_mask"] for x in batch], dim=0),
         "label": torch.stack([x["label"] for x in batch], dim=0),
+        "kl_input_ids": torch.stack(kl_input_ids, dim=0),
+        "kl_attention_mask": torch.stack(kl_attention_masks, dim=0),
+        "kl_response_mask": torch.stack(kl_response_masks, dim=0),
     }
 
 
@@ -151,6 +237,54 @@ def sequence_logprob(logits: torch.Tensor, labels: torch.Tensor, mask: torch.Ten
     return token_logps.sum(dim=-1)
 
 
+def compute_kto_loss_from_logps(
+    policy_logps: torch.Tensor,
+    ref_logps: torch.Tensor,
+    policy_kl_logps: torch.Tensor,
+    ref_kl_logps: torch.Tensor,
+    labels: torch.Tensor,
+    beta: float,
+    desirable_weight: float = 1.0,
+    undesirable_weight: float = 1.0,
+):
+    if policy_logps.shape != ref_logps.shape or policy_logps.shape != labels.shape:
+        raise ValueError("KTO matched logps and labels must have the same shape")
+    if policy_kl_logps.shape != ref_kl_logps.shape or policy_kl_logps.shape != policy_logps.shape:
+        raise ValueError("KTO KL logps must match the response batch shape")
+    if policy_logps.numel() < 2:
+        raise ValueError("canonical KTO requires at least two rows")
+    if beta <= 0.0 or desirable_weight <= 0.0 or undesirable_weight <= 0.0:
+        raise ValueError("KTO beta and class weights must be positive")
+
+    logratios = policy_logps - ref_logps
+    kl_estimate = torch.clamp((policy_kl_logps - ref_kl_logps).mean().detach(), min=0.0)
+    centered_values = beta * (logratios - kl_estimate)
+    rewards = beta * logratios
+    labels = labels.to(dtype=rewards.dtype)
+    weights = torch.where(
+        labels > 0,
+        rewards.new_tensor(desirable_weight),
+        rewards.new_tensor(undesirable_weight),
+    )
+    desirable_losses = 1.0 - torch.sigmoid(centered_values)
+    undesirable_losses = 1.0 - torch.sigmoid(-centered_values)
+    losses = torch.where(labels > 0, desirable_losses, undesirable_losses) * weights
+    desirable_mask = labels > 0
+    undesirable_mask = labels < 0
+    desirable_reward = rewards[desirable_mask].mean() if desirable_mask.any() else rewards.new_tensor(0.0)
+    undesirable_reward = rewards[undesirable_mask].mean() if undesirable_mask.any() else rewards.new_tensor(0.0)
+    return {
+        "loss": losses.mean(),
+        "reward_accuracy": ((labels * (logratios - kl_estimate)) > 0).float().mean(),
+        "reward_margin": desirable_reward - undesirable_reward,
+        "desirable_reward": desirable_reward,
+        "undesirable_reward": undesirable_reward,
+        "kl_estimate": kl_estimate,
+        # Deprecated metric name retained for existing result readers.
+        "kl_center": kl_estimate,
+    }
+
+
 def compute_kto_batch_metrics(
     model,
     ref_model,
@@ -161,33 +295,33 @@ def compute_kto_batch_metrics(
 ):
     out = model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
     policy_logps = sequence_logprob(out.logits, batch["input_ids"], batch["response_mask"])
+    # KTO's KL reference point is deliberately detached. It is estimated from
+    # prompt/completion mismatches, not from the matched training responses.
     with torch.no_grad():
+        policy_kl_out = model(
+            input_ids=batch["kl_input_ids"], attention_mask=batch["kl_attention_mask"]
+        )
+        policy_kl_logps = sequence_logprob(
+            policy_kl_out.logits, batch["kl_input_ids"], batch["kl_response_mask"]
+        )
         ref_out = ref_model(input_ids=batch["input_ids"], attention_mask=batch["attention_mask"])
         ref_logps = sequence_logprob(ref_out.logits, batch["input_ids"], batch["response_mask"])
-    logratios = policy_logps - ref_logps
-    kl_center = torch.clamp(logratios.mean().detach(), min=0.0)
-    rewards = beta * (logratios - kl_center)
-    labels = batch["label"].to(dtype=rewards.dtype)
-    weights = torch.where(
-        labels > 0,
-        rewards.new_tensor(desirable_weight),
-        rewards.new_tensor(undesirable_weight),
+        ref_kl_out = ref_model(
+            input_ids=batch["kl_input_ids"], attention_mask=batch["kl_attention_mask"]
+        )
+        ref_kl_logps = sequence_logprob(
+            ref_kl_out.logits, batch["kl_input_ids"], batch["kl_response_mask"]
+        )
+    return compute_kto_loss_from_logps(
+        policy_logps,
+        ref_logps,
+        policy_kl_logps,
+        ref_kl_logps,
+        batch["label"],
+        beta,
+        desirable_weight=desirable_weight,
+        undesirable_weight=undesirable_weight,
     )
-    desirable_losses = 1.0 - torch.sigmoid(rewards)
-    undesirable_losses = 1.0 - torch.sigmoid(-rewards)
-    losses = torch.where(labels > 0, desirable_losses, undesirable_losses) * weights
-    desirable_mask = labels > 0
-    undesirable_mask = labels < 0
-    desirable_reward = rewards[desirable_mask].mean() if desirable_mask.any() else rewards.new_tensor(0.0)
-    undesirable_reward = rewards[undesirable_mask].mean() if undesirable_mask.any() else rewards.new_tensor(0.0)
-    return {
-        "loss": losses.mean(),
-        "reward_accuracy": ((labels * rewards) > 0).float().mean(),
-        "reward_margin": desirable_reward - undesirable_reward,
-        "desirable_reward": desirable_reward,
-        "undesirable_reward": undesirable_reward,
-        "kl_center": kl_center,
-    }
 
 
 def evaluate_kto(
@@ -207,6 +341,7 @@ def evaluate_kto(
         "reward_margin": 0.0,
         "desirable_reward": 0.0,
         "undesirable_reward": 0.0,
+        "kl_estimate": 0.0,
         "kl_center": 0.0,
     }
     count = 0

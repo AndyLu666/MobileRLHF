@@ -80,6 +80,83 @@ void test_kto_metrics_from_logps() {
     require_close(m.reward_accuracy, 1.0f, 1e-6f, "KTO reward accuracy");
 }
 
+void test_canonical_kto_fixed_numeric_and_gradient_fixture() {
+    const std::vector<float> policy{-1.0f, -2.0f, -0.5f, -1.5f};
+    const std::vector<float> reference{-1.2f, -1.8f, -0.7f, -1.4f};
+    const std::vector<float> policy_kl{-1.1f, -1.9f, -0.8f, -1.3f};
+    const std::vector<float> reference_kl{-1.3f, -1.7f, -0.9f, -1.4f};
+    const std::vector<float> labels{1.0f, 1.0f, -1.0f, -1.0f};
+    constexpr float beta = 0.1f;
+    constexpr float desirable_weight = 1.5f;
+    constexpr float undesirable_weight = 0.75f;
+
+    const DPOMetrics metrics = compute_kto_metrics_from_logps_and_kl(
+        policy, policy_kl, reference, reference_kl, labels, beta,
+        desirable_weight, undesirable_weight);
+    require_close(metrics.kl_estimate, 0.05f, 1e-6f,
+                  "canonical KTO KL estimate");
+    require_close(metrics.loss, 0.5634374043f, 1e-6f,
+                  "canonical KTO fixed loss");
+    require_close(metrics.chosen_reward, 0.0f, 1e-6f,
+                  "canonical KTO desirable reward");
+    require_close(metrics.rejected_reward, 0.005f, 1e-6f,
+                  "canonical KTO undesirable reward");
+    require_close(metrics.reward_margin, -0.005f, 1e-6f,
+                  "canonical KTO reward margin");
+    require_close(metrics.reward_accuracy, 0.5f, 1e-6f,
+                  "canonical KTO reward accuracy");
+
+    const int64_t B = 4;
+    const int64_t S = 2;
+    const int64_t V = 2;
+    auto logits = zeros({B, S, V}, kFloat32, kCPU);
+    auto kl_logits = zeros({B, S, V}, kFloat32, kCPU);
+    logits->set_requires_grad(true);
+    kl_logits->set_requires_grad(true);
+    auto ids = make_i32({B, S}, {0, 1, 0, 1, 0, 1, 0, 1});
+    auto response_mask = make_i32({B, S}, {0, 1, 0, 1, 0, 1, 0, 1});
+
+    const float base_logp = -std::log(2.0f);
+    const std::vector<float> ratios{0.2f, -0.2f, 0.2f, -0.1f};
+    const std::vector<float> kl_ratios{0.2f, -0.2f, 0.1f, 0.1f};
+    std::vector<float> dense_reference;
+    std::vector<float> dense_reference_kl;
+    for (std::size_t i = 0; i < ratios.size(); ++i) {
+        dense_reference.push_back(base_logp - ratios[i]);
+        dense_reference_kl.push_back(base_logp - kl_ratios[i]);
+    }
+
+    auto loss = kto_loss_with_ref_logps_and_kl(
+        logits, kl_logits, dense_reference, dense_reference_kl,
+        ids, ids, response_mask, response_mask, labels, beta,
+        desirable_weight, undesirable_weight);
+    require_close(loss->data<float>()[0], 0.5634374043f, 1e-6f,
+                  "canonical KTO dense fixed loss");
+    loss->backward();
+    require(logits->grad() != nullptr, "canonical KTO missing matched logits grad");
+    require(kl_logits->grad() == nullptr,
+            "canonical KTO must detach the mismatched KL branch");
+
+    const float expected_coeffs[] = {
+        -0.009374472676f,
+        -0.009373535309f,
+         0.004687236338f,
+         0.004687236338f,
+    };
+    const float* grad = logits->grad()->data<float>();
+    for (int64_t b = 0; b < B; ++b) {
+        const int64_t row = (b * S) * V;
+        require_close(grad[row], -0.5f * expected_coeffs[b], 1e-6f,
+                      "canonical KTO non-target logit gradient");
+        require_close(grad[row + 1], 0.5f * expected_coeffs[b], 1e-6f,
+                      "canonical KTO target logit gradient");
+        require_close(grad[row + V], 0.0f, 1e-7f,
+                      "canonical KTO unused timestep gradient");
+        require_close(grad[row + V + 1], 0.0f, 1e-7f,
+                      "canonical KTO unused target gradient");
+    }
+}
+
 void test_dense_backward_has_policy_grads() {
     auto A = zeros({2, 2}, kFloat32, kCPU);
     auto B = zeros({2, 3}, kFloat32, kCPU);
@@ -240,6 +317,7 @@ void test_streaming_kto_matches_dense_loss_and_grad() {
 int main() {
     test_metrics_from_logps();
     test_kto_metrics_from_logps();
+    test_canonical_kto_fixed_numeric_and_gradient_fixture();
     test_dense_backward_has_policy_grads();
     test_streaming_matches_dense_loss_and_grad();
     test_streaming_kto_matches_dense_loss_and_grad();

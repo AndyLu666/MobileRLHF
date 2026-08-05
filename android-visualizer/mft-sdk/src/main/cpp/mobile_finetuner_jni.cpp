@@ -1,6 +1,6 @@
 #include <jni.h>
 
-#include "mobile_finetuner/mobile_finetuner.h"
+#include "mobile_finetuner/mobile_finetuner.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -171,6 +171,24 @@ std::vector<jfloat> copy_float_array(JNIEnv* env, jfloatArray array, int64_t cou
     }
     std::vector<jfloat> values(static_cast<size_t>(count));
     env->GetFloatArrayRegion(array, 0, static_cast<jsize>(count), values.data());
+    return values;
+}
+
+std::vector<jboolean> copy_boolean_array(
+        JNIEnv* env,
+        jbooleanArray array,
+        int64_t count,
+        const char* name) {
+    if (array == nullptr) {
+        throw_illegal_argument(env, std::string(name) + " must not be null");
+        return {};
+    }
+    if (env->GetArrayLength(array) != count) {
+        throw_illegal_argument(env, std::string(name) + " has unexpected length");
+        return {};
+    }
+    std::vector<jboolean> values(static_cast<size_t>(count));
+    env->GetBooleanArrayRegion(array, 0, static_cast<jsize>(count), values.data());
     return values;
 }
 
@@ -841,7 +859,9 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainKtoPreferenceBatch(
         auto batch = ops::make_preference_batch(require_tokenizer(*session), samples, batch_cfg);
         const ops::KTOTrainStepResult result = session->kto_trainer->train_step(batch);
 
-        jdouble values[13] = {
+        // Keep the historical 13-value prefix stable for compatibility and
+        // append canonical KTO diagnostics after it.
+        jdouble values[17] = {
             static_cast<jdouble>(result.loss),
             static_cast<jdouble>(result.trainable_tensor_count),
             static_cast<jdouble>(result.pair_count),
@@ -854,9 +874,105 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainKtoPreferenceBatch(
             static_cast<jdouble>(result.reward_accuracy),
             static_cast<jdouble>(result.accumulation_step),
             static_cast<jdouble>(result.gradient_accumulation_steps),
-            result.optimizer_step ? 1.0 : 0.0
+            result.optimizer_step ? 1.0 : 0.0,
+            static_cast<jdouble>(result.kl_estimate),
+            static_cast<jdouble>(result.desirable_count),
+            static_cast<jdouble>(result.undesirable_count),
+            static_cast<jdouble>(result.valid_kl_response_token_count)
         };
-        return make_double_array(env, values, 13);
+        return make_double_array(env, values, 17);
+    }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeTrainKtoBatch(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jobjectArray prompts,
+        jobjectArray completions,
+        jbooleanArray desirable,
+        jfloatArray ref_logps,
+        jfloatArray ref_kl_logps,
+        jint sequence_length,
+        jboolean append_eos_to_completion) {
+    return guarded(env, [&]() -> jdoubleArray {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->kto_trainer) {
+            throw std::runtime_error("KTO trainer is not initialized; call createKtoTrainer first");
+        }
+        if (sequence_length <= 1) {
+            throw std::invalid_argument("sequenceLength must be > 1");
+        }
+
+        auto prompt_rows = copy_string_array(env, prompts, "prompts");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto completion_rows = copy_string_array(env, completions, "completions");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        if (completion_rows.size() != prompt_rows.size()) {
+            throw std::invalid_argument("KTO text arrays must have the same length");
+        }
+
+        const int64_t count = static_cast<int64_t>(prompt_rows.size());
+        auto label_rows = copy_boolean_array(env, desirable, count, "desirable");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto reference_rows = copy_float_array(env, ref_logps, count, "refLogps");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto reference_kl_rows = copy_float_array(env, ref_kl_logps, count, "refKlLogps");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+
+        std::vector<ops::KTOSample> samples;
+        samples.reserve(prompt_rows.size());
+        for (size_t i = 0; i < prompt_rows.size(); ++i) {
+            ops::KTOSample sample;
+            sample.prompt = std::move(prompt_rows[i]);
+            sample.completion = std::move(completion_rows[i]);
+            sample.desirable = label_rows[i] == JNI_TRUE;
+            sample.has_reference_logps = true;
+            sample.ref_logp = reference_rows[i];
+            sample.ref_kl_logp = reference_kl_rows[i];
+            samples.push_back(std::move(sample));
+        }
+
+        ops::KTOBatchConfig batch_cfg;
+        batch_cfg.sequence_length = sequence_length;
+        batch_cfg.append_eos_to_completion = append_eos_to_completion == JNI_TRUE;
+        auto batch = ops::make_kto_batch(require_tokenizer(*session), samples, batch_cfg);
+        const ops::KTOTrainStepResult result = session->kto_trainer->train_step(batch);
+
+        jdouble values[17] = {
+            static_cast<jdouble>(result.loss),
+            static_cast<jdouble>(result.trainable_tensor_count),
+            static_cast<jdouble>(result.pair_count),
+            static_cast<jdouble>(result.sample_count),
+            static_cast<jdouble>(result.valid_response_token_count),
+            static_cast<jdouble>(result.accumulated_loss),
+            static_cast<jdouble>(result.desirable_reward),
+            static_cast<jdouble>(result.undesirable_reward),
+            static_cast<jdouble>(result.reward_margin),
+            static_cast<jdouble>(result.reward_accuracy),
+            static_cast<jdouble>(result.accumulation_step),
+            static_cast<jdouble>(result.gradient_accumulation_steps),
+            result.optimizer_step ? 1.0 : 0.0,
+            static_cast<jdouble>(result.kl_estimate),
+            static_cast<jdouble>(result.desirable_count),
+            static_cast<jdouble>(result.undesirable_count),
+            static_cast<jdouble>(result.valid_kl_response_token_count)
+        };
+        return make_double_array(env, values, 17);
     }, static_cast<jdoubleArray>(nullptr));
 }
 
@@ -921,6 +1037,76 @@ Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeScorePreferenceBatch(
             values.push_back(static_cast<jdouble>(value));
         }
         for (float value : scores.rejected_logps) {
+            values.push_back(static_cast<jdouble>(value));
+        }
+        return make_double_array(env, values.data(), static_cast<jsize>(values.size()));
+    }, static_cast<jdoubleArray>(nullptr));
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeScoreKtoBatch(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jobjectArray prompts,
+        jobjectArray completions,
+        jbooleanArray desirable,
+        jint sequence_length,
+        jboolean append_eos_to_completion) {
+    return guarded(env, [&]() -> jdoubleArray {
+        NativeSession* session = require_session(env, handle);
+        if (session == nullptr) {
+            return nullptr;
+        }
+        if (!session->model) {
+            throw std::runtime_error("Model is not initialized");
+        }
+        if (sequence_length <= 1) {
+            throw std::invalid_argument("sequenceLength must be > 1");
+        }
+
+        auto prompt_rows = copy_string_array(env, prompts, "prompts");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        auto completion_rows = copy_string_array(env, completions, "completions");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+        if (completion_rows.size() != prompt_rows.size()) {
+            throw std::invalid_argument("KTO text arrays must have the same length");
+        }
+
+        const int64_t count = static_cast<int64_t>(prompt_rows.size());
+        auto label_rows = copy_boolean_array(env, desirable, count, "desirable");
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
+
+        std::vector<ops::KTOSample> samples;
+        samples.reserve(prompt_rows.size());
+        for (size_t i = 0; i < prompt_rows.size(); ++i) {
+            ops::KTOSample sample;
+            sample.prompt = std::move(prompt_rows[i]);
+            sample.completion = std::move(completion_rows[i]);
+            sample.desirable = label_rows[i] == JNI_TRUE;
+            samples.push_back(std::move(sample));
+        }
+
+        ops::KTOBatchConfig batch_cfg;
+        batch_cfg.sequence_length = sequence_length;
+        batch_cfg.append_eos_to_completion = append_eos_to_completion == JNI_TRUE;
+        auto batch = ops::make_kto_batch(require_tokenizer(*session), samples, batch_cfg);
+        const ops::KTOLogps scores = ops::score_kto_logps(*session->model, batch);
+
+        std::vector<jdouble> values;
+        values.reserve(2 + scores.response_logps.size() + scores.kl_response_logps.size());
+        values.push_back(static_cast<jdouble>(scores.valid_response_token_count));
+        values.push_back(static_cast<jdouble>(scores.valid_kl_response_token_count));
+        for (float value : scores.response_logps) {
+            values.push_back(static_cast<jdouble>(value));
+        }
+        for (float value : scores.kl_response_logps) {
             values.push_back(static_cast<jdouble>(value));
         }
         return make_double_array(env, values.data(), static_cast<jsize>(values.size()));

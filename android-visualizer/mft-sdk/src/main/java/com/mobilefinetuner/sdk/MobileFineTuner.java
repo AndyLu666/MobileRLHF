@@ -190,6 +190,76 @@ public final class MobileFineTuner implements AutoCloseable {
         );
     }
 
+    /**
+     * Trains one canonical KTO batch of independently labelled completions.
+     *
+     * <p>The batch must contain at least two samples. The native batch builder
+     * estimates KL with a second branch that combines each prompt with the
+     * previous sample's completion. Consequently {@code refLogps} and
+     * {@code refKlLogps} must have been produced for this exact batch ordering
+     * and tokenization configuration, for example by {@link #scoreKtoBatch}.</p>
+     *
+     * @param desirable {@code true} for desirable feedback and {@code false}
+     *                   for undesirable feedback
+     */
+    public KtoStepResult trainKtoBatch(
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable,
+            float[] refLogps,
+            float[] refKlLogps,
+            int sequenceLength
+    ) {
+        return trainKtoBatch(
+                prompts,
+                completions,
+                desirable,
+                refLogps,
+                refKlLogps,
+                sequenceLength,
+                false
+        );
+    }
+
+    /**
+     * Trains one canonical KTO batch of independently labelled completions.
+     * See {@link #trainKtoBatch(String[], String[], boolean[], float[], float[], int)}.
+     */
+    public KtoStepResult trainKtoBatch(
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable,
+            float[] refLogps,
+            float[] refKlLogps,
+            int sequenceLength,
+            boolean appendEosToCompletion
+    ) {
+        int batchSize = requireKtoBatch(prompts, completions, desirable);
+        requireLength(refLogps, batchSize, "refLogps");
+        requireLength(refKlLogps, batchSize, "refKlLogps");
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+
+        double[] result = nativeTrainKtoBatch(
+                requireOpen(),
+                Arrays.copyOf(prompts, prompts.length),
+                Arrays.copyOf(completions, completions.length),
+                Arrays.copyOf(desirable, desirable.length),
+                Arrays.copyOf(refLogps, refLogps.length),
+                Arrays.copyOf(refKlLogps, refKlLogps.length),
+                sequenceLength,
+                appendEosToCompletion
+        );
+        return parseKtoStepResult(result);
+    }
+
+    /**
+     * Legacy paired KTO approximation retained for source compatibility.
+     *
+     * @deprecated Use {@link #trainKtoBatch} with independent binary feedback.
+     */
+    @Deprecated
     public KtoStepResult trainKtoPreferenceBatch(
             String[] prompts,
             String[] chosen,
@@ -209,6 +279,12 @@ public final class MobileFineTuner implements AutoCloseable {
         );
     }
 
+    /**
+     * Legacy paired KTO approximation retained for source compatibility.
+     *
+     * @deprecated Use {@link #trainKtoBatch} with independent binary feedback.
+     */
+    @Deprecated
     public KtoStepResult trainKtoPreferenceBatch(
             String[] prompts,
             String[] chosen,
@@ -235,21 +311,7 @@ public final class MobileFineTuner implements AutoCloseable {
                 sequenceLength,
                 appendEosToResponse
         );
-        return new KtoStepResult(
-                (float) result[0],
-                (int) result[1],
-                (int) result[2],
-                (int) result[3],
-                (int) result[4],
-                (float) result[5],
-                (float) result[6],
-                (float) result[7],
-                (float) result[8],
-                (float) result[9],
-                (int) result[10],
-                (int) result[11],
-                result[12] != 0.0
-        );
+        return parseKtoStepResult(result);
     }
 
     public PreferenceStepResult trainPreferenceBatch(
@@ -327,6 +389,60 @@ public final class MobileFineTuner implements AutoCloseable {
             rejectedLogps[i] = (float) result[1 + batchSize + i];
         }
         return new PreferenceScoreResult((int) result[0], chosenLogps, rejectedLogps);
+    }
+
+    public KtoScoreResult scoreKtoBatch(
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable,
+            int sequenceLength
+    ) {
+        return scoreKtoBatch(prompts, completions, desirable, sequenceLength, false);
+    }
+
+    /**
+     * Scores both branches needed for cached-reference canonical KTO training.
+     *
+     * <p>{@link KtoScoreResult#responseLogps} contains scores for matched
+     * prompt/completion rows. {@link KtoScoreResult#klResponseLogps} contains
+     * scores for the same prompts paired with the previous completion in this
+     * batch. Keep the same row order when passing both arrays to
+     * {@link #trainKtoBatch}.</p>
+     */
+    public KtoScoreResult scoreKtoBatch(
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable,
+            int sequenceLength,
+            boolean appendEosToCompletion
+    ) {
+        int batchSize = requireKtoBatch(prompts, completions, desirable);
+        if (sequenceLength <= 1) {
+            throw new IllegalArgumentException("sequenceLength must be > 1");
+        }
+        double[] result = nativeScoreKtoBatch(
+                requireOpen(),
+                Arrays.copyOf(prompts, prompts.length),
+                Arrays.copyOf(completions, completions.length),
+                Arrays.copyOf(desirable, desirable.length),
+                sequenceLength,
+                appendEosToCompletion
+        );
+        if (result.length != 2 + batchSize * 2) {
+            throw new IllegalStateException("Native KTO score result has unexpected length");
+        }
+        float[] responseLogps = new float[batchSize];
+        float[] klResponseLogps = new float[batchSize];
+        for (int i = 0; i < batchSize; ++i) {
+            responseLogps[i] = (float) result[2 + i];
+            klResponseLogps[i] = (float) result[2 + batchSize + i];
+        }
+        return new KtoScoreResult(
+                (int) result[0],
+                (int) result[1],
+                responseLogps,
+                klResponseLogps
+        );
     }
 
     public void saveLoraAdapter(File path) {
@@ -416,6 +532,55 @@ public final class MobileFineTuner implements AutoCloseable {
         return prompts.length;
     }
 
+    private static int requireKtoBatch(
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable
+    ) {
+        if (prompts == null || completions == null || desirable == null) {
+            throw new IllegalArgumentException("KTO arrays must not be null");
+        }
+        if (prompts.length < 2) {
+            throw new IllegalArgumentException("KTO batch must contain at least two samples");
+        }
+        if (completions.length != prompts.length || desirable.length != prompts.length) {
+            throw new IllegalArgumentException("KTO arrays must have the same length");
+        }
+        for (int i = 0; i < prompts.length; ++i) {
+            if (prompts[i] == null || completions[i] == null) {
+                throw new IllegalArgumentException("KTO text arrays must not contain null entries");
+            }
+        }
+        return prompts.length;
+    }
+
+    private static KtoStepResult parseKtoStepResult(double[] result) {
+        if (result == null || (result.length != 13 && result.length != 17)) {
+            throw new IllegalStateException("Native KTO train result has unexpected length");
+        }
+        int pairCount = (int) result[2];
+        int sampleCount = (int) result[3];
+        return new KtoStepResult(
+                (float) result[0],
+                (int) result[1],
+                pairCount,
+                sampleCount,
+                (int) result[4],
+                (float) result[5],
+                (float) result[6],
+                (float) result[7],
+                (float) result[8],
+                (float) result[9],
+                (int) result[10],
+                (int) result[11],
+                result[12] != 0.0,
+                result.length == 17 ? (float) result[13] : 0.0f,
+                result.length == 17 ? (int) result[14] : pairCount,
+                result.length == 17 ? (int) result[15] : pairCount,
+                result.length == 17 ? (int) result[16] : 0
+        );
+    }
+
     private static native String nativeBuildInfo();
     private static native double[] nativeSelfTest(String workingDir);
     private static native long nativeCreate(String modelDir, boolean loadWeights);
@@ -490,6 +655,16 @@ public final class MobileFineTuner implements AutoCloseable {
             int sequenceLength,
             boolean appendEosToResponse
     );
+    private static native double[] nativeTrainKtoBatch(
+            long handle,
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable,
+            float[] refLogps,
+            float[] refKlLogps,
+            int sequenceLength,
+            boolean appendEosToCompletion
+    );
     private static native double[] nativeScorePreferenceBatch(
             long handle,
             String[] prompts,
@@ -497,6 +672,14 @@ public final class MobileFineTuner implements AutoCloseable {
             String[] rejected,
             int sequenceLength,
             boolean appendEosToResponse
+    );
+    private static native double[] nativeScoreKtoBatch(
+            long handle,
+            String[] prompts,
+            String[] completions,
+            boolean[] desirable,
+            int sequenceLength,
+            boolean appendEosToCompletion
     );
     private static native void nativeSaveLoraAdapter(long handle, String path);
     private static native void nativeLoadLoraAdapter(long handle, String path);
@@ -774,17 +957,40 @@ public final class MobileFineTuner implements AutoCloseable {
         }
     }
 
+    public static final class KtoScoreResult {
+        public final int validResponseTokenCount;
+        public final int validKlResponseTokenCount;
+        public final float[] responseLogps;
+        public final float[] klResponseLogps;
+
+        private KtoScoreResult(
+                int validResponseTokenCount,
+                int validKlResponseTokenCount,
+                float[] responseLogps,
+                float[] klResponseLogps
+        ) {
+            this.validResponseTokenCount = validResponseTokenCount;
+            this.validKlResponseTokenCount = validKlResponseTokenCount;
+            this.responseLogps = Arrays.copyOf(responseLogps, responseLogps.length);
+            this.klResponseLogps = Arrays.copyOf(klResponseLogps, klResponseLogps.length);
+        }
+    }
+
     public static final class KtoStepResult {
         public final float loss;
         public final int trainableTensorCount;
         public final int pairCount;
         public final int sampleCount;
+        public final int desirableCount;
+        public final int undesirableCount;
         public final int validResponseTokenCount;
+        public final int validKlResponseTokenCount;
         public final float accumulatedLoss;
         public final float desirableReward;
         public final float undesirableReward;
         public final float rewardMargin;
         public final float rewardAccuracy;
+        public final float klEstimate;
         public final int accumulationStep;
         public final int gradientAccumulationSteps;
         public final boolean optimizerStep;
@@ -802,18 +1008,26 @@ public final class MobileFineTuner implements AutoCloseable {
                 float rewardAccuracy,
                 int accumulationStep,
                 int gradientAccumulationSteps,
-                boolean optimizerStep
+                boolean optimizerStep,
+                float klEstimate,
+                int desirableCount,
+                int undesirableCount,
+                int validKlResponseTokenCount
         ) {
             this.loss = loss;
             this.trainableTensorCount = trainableTensorCount;
             this.pairCount = pairCount;
             this.sampleCount = sampleCount;
+            this.desirableCount = desirableCount;
+            this.undesirableCount = undesirableCount;
             this.validResponseTokenCount = validResponseTokenCount;
+            this.validKlResponseTokenCount = validKlResponseTokenCount;
             this.accumulatedLoss = accumulatedLoss;
             this.desirableReward = desirableReward;
             this.undesirableReward = undesirableReward;
             this.rewardMargin = rewardMargin;
             this.rewardAccuracy = rewardAccuracy;
+            this.klEstimate = klEstimate;
             this.accumulationStep = accumulationStep;
             this.gradientAccumulationSteps = gradientAccumulationSteps;
             this.optimizerStep = optimizerStep;

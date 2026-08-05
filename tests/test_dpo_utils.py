@@ -11,10 +11,12 @@ from pytorch_alignment.dpo_utils import (
     PreferenceDataset,
     binary_feedback_collate_batch,
     compute_kto_batch_metrics,
+    compute_kto_loss_from_logps,
     compute_dpo_batch_metrics,
     dpo_collate_batch,
     evaluate_dpo,
     is_desirable_label,
+    parse_desirable_label,
 )
 from pytorch_alignment.kto_cli import build_qwen_lora_config, resolve_qwen_model_dir, run_tiny_kto_from_jsonl
 from pytorch_alignment.kto_trainer import KtoTrainingConfig, train_kto
@@ -114,6 +116,78 @@ class DpoUtilsTest(unittest.TestCase):
         self.assertEqual(batch["input_ids"].shape, torch.Size([2, 64]))
         self.assertEqual(batch["label"].tolist(), [1.0, -1.0])
 
+    def test_binary_feedback_dataset_skips_missing_or_invalid_labels(self):
+        feedback_path = Path(self.tmpdir.name) / "invalid_labels.jsonl"
+        feedback_path.write_text(
+            "\n".join(
+                [
+                    '{"prompt":"A","response":"x"}',
+                    '{"prompt":"B","response":"y","label":"maybe"}',
+                    '{"prompt":"C","response":"z","label":0}',
+                    '{"prompt":"D","response":"w","label":"chosen"}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        dataset = BinaryFeedbackDataset(str(feedback_path), self.tokenizer, seq_len=8)
+        self.assertEqual(len(dataset), 2)
+        self.assertEqual([dataset[i]["label"].item() for i in range(2)], [-1.0, 1.0])
+        with self.assertRaises(ValueError):
+            parse_desirable_label("maybe")
+
+    def test_kto_collator_rotates_completions_for_kl_rows(self):
+        feedback_path = Path(self.tmpdir.name) / "rotation.jsonl"
+        feedback_path.write_text(
+            "\n".join(
+                [
+                    '{"prompt":"A","response":"x","label":true}',
+                    '{"prompt":"B","response":"y","label":false}',
+                    '{"prompt":"C","response":"z","label":true}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        dataset = BinaryFeedbackDataset(str(feedback_path), self.tokenizer, seq_len=8)
+        batch = binary_feedback_collate_batch([dataset[0], dataset[1], dataset[2]])
+
+        a = self.tokenizer.encode("A")[0]
+        b = self.tokenizer.encode("B")[0]
+        c = self.tokenizer.encode("C")[0]
+        x = self.tokenizer.encode("x")[0]
+        y = self.tokenizer.encode("y")[0]
+        z = self.tokenizer.encode("z")[0]
+        self.assertEqual(batch["kl_input_ids"][:, :2].tolist(), [[a, z], [b, x], [c, y]])
+        self.assertEqual(batch["kl_response_mask"][:, :2].tolist(), [[0, 1], [0, 1], [0, 1]])
+
+    def test_canonical_kto_fixed_logp_fixture(self):
+        policy = torch.tensor([-1.0, -2.0, -0.5, -1.5], requires_grad=True)
+        reference = torch.tensor([-1.2, -1.8, -0.7, -1.4])
+        policy_kl = torch.tensor([-1.1, -1.9, -0.8, -1.3], requires_grad=True)
+        reference_kl = torch.tensor([-1.3, -1.7, -0.9, -1.4])
+        labels = torch.tensor([1.0, 1.0, -1.0, -1.0])
+
+        metrics = compute_kto_loss_from_logps(
+            policy,
+            reference,
+            policy_kl,
+            reference_kl,
+            labels,
+            beta=0.1,
+            desirable_weight=1.5,
+            undesirable_weight=0.75,
+        )
+        self.assertAlmostEqual(metrics["kl_estimate"].item(), 0.05, places=6)
+        self.assertAlmostEqual(metrics["loss"].item(), 0.5634374043, places=6)
+        metrics["loss"].backward()
+        expected = torch.tensor(
+            [-0.009374472676, -0.009373535309, 0.004687236338, 0.004687236338]
+        )
+        self.assertTrue(torch.allclose(policy.grad, expected, atol=1e-8, rtol=1e-6))
+        self.assertIsNone(policy_kl.grad)
+
     def test_convert_dpo_pairs_to_balanced_kto_records(self):
         kto_path = Path(self.tmpdir.name) / "kto.jsonl"
         stats = convert_dpo_pairs_to_kto_records(self.data_path, kto_path)
@@ -129,8 +203,9 @@ class DpoUtilsTest(unittest.TestCase):
         ]
         self.assertEqual(records[0]["response"], " Hello there.")
         self.assertIs(records[0]["label"], True)
-        self.assertEqual(records[1]["response"], " No.")
-        self.assertIs(records[1]["label"], False)
+        self.assertEqual(records[3]["response"], " No.")
+        self.assertIs(records[3]["label"], False)
+        self.assertEqual([record["label"] for record in records], [True] * 3 + [False] * 3)
         self.assertEqual({record["feedback_format"] for record in records}, {"kto_binary"})
 
     def test_kto_metrics_use_binary_feedback_names_and_weights(self):

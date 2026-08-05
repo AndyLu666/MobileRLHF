@@ -74,28 +74,36 @@ def train_kto(
 ) -> dict[str, Any]:
     if len(train_dataset) == 0:
         raise ValueError("KTO training dataset is empty")
+    if len(train_dataset) < 2:
+        raise ValueError("canonical KTO requires at least two training rows")
     if config.max_steps <= 0:
         raise ValueError("max_steps must be positive")
-    if config.batch_size <= 0:
-        raise ValueError("batch_size must be positive")
+    if config.batch_size <= 1:
+        raise ValueError("canonical KTO batch_size must be greater than one")
 
     torch.manual_seed(config.seed)
     policy_model.to(device)
     reference_model.to(device)
     _prepare_reference_model(reference_model)
 
+    train_batch_size = min(config.batch_size, len(train_dataset))
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.batch_size,
+        batch_size=train_batch_size,
         shuffle=True,
         collate_fn=binary_feedback_collate_batch,
+        drop_last=(len(train_dataset) % train_batch_size == 1),
     )
     eval_source = eval_dataset if eval_dataset is not None and len(eval_dataset) > 0 else train_dataset
+    if len(eval_source) < 2:
+        raise ValueError("canonical KTO evaluation requires at least two rows")
+    eval_batch_size = min(config.batch_size, len(eval_source))
     eval_loader = DataLoader(
         eval_source,
-        batch_size=config.batch_size,
+        batch_size=eval_batch_size,
         shuffle=False,
         collate_fn=binary_feedback_collate_batch,
+        drop_last=(len(eval_source) % eval_batch_size == 1),
     )
 
     optimizer = torch.optim.AdamW(

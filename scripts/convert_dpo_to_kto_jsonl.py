@@ -45,7 +45,8 @@ def convert_dpo_pairs_to_kto_records(input_path: str | Path, output_path: str | 
         "skipped_identical": 0,
     }
 
-    with input_path.open("r", encoding="utf-8") as src, output_path.open("w", encoding="utf-8") as out:
+    valid_rows: list[tuple[str, str, str, dict[str, Any]]] = []
+    with input_path.open("r", encoding="utf-8") as src:
         for line in src:
             if not line.strip():
                 continue
@@ -65,12 +66,20 @@ def convert_dpo_pairs_to_kto_records(input_path: str | Path, output_path: str | 
                 stats["skipped_identical"] += 1
                 continue
 
-            _write_record(out, prompt, chosen, True, row)
-            _write_record(out, prompt, rejected, False, row)
+            valid_rows.append((prompt, chosen, rejected, row))
             stats["pairs"] += 1
             stats["written"] += 2
             stats["desirable"] += 1
             stats["undesirable"] += 1
+
+    # Match TRL's preference-unpairing layout: all desirable completions first,
+    # followed by all undesirable completions. This prevents a two-row batch
+    # from trivially rotating the two responses belonging to the same prompt.
+    with output_path.open("w", encoding="utf-8") as out:
+        for prompt, chosen, _, row in valid_rows:
+            _write_record(out, prompt, chosen, True, row)
+        for prompt, _, rejected, row in valid_rows:
+            _write_record(out, prompt, rejected, False, row)
 
     return stats
 

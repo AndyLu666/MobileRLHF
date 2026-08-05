@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(Operators VERSION 2.0.0 LANGUAGES CXX)
+project(Operators VERSION 2.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -128,6 +128,7 @@ set(FINETUNE_SOURCES
     finetune_ops/data/mmlu_dataset.cpp
     finetune_ops/data/causal_lm_batch.cpp
     finetune_ops/data/preference_batch.cpp
+    finetune_ops/data/kto_batch.cpp
     finetune_ops/data/batch_provider.cpp
     
     # Stage B: data loading and training
@@ -141,6 +142,9 @@ set(FINETUNE_SOURCES
     finetune_ops/optim/dpo_trainer.cpp
     finetune_ops/optim/kto_trainer.cpp
     finetune_ops/optim/preference_scoring.cpp
+
+    # Stable C ABI wrapper
+    src/mobile_finetuner_c.cpp
     
     # Stage C: LoRA save/load
     finetune_ops/graph/lora_saver.cpp
@@ -338,6 +342,29 @@ install(FILES
 # ============================================================================
 if(BUILD_TESTS)
     enable_testing()
+
+    # Compile and link the public ABI from a real C11 translation unit.  The
+    # implementation is C++, so use the C++ linker while keeping the source
+    # language (and therefore the header compatibility check) as C.
+    add_executable(test_mobile_finetuner_c_header
+        tests/test_mobile_finetuner_c_header.c
+    )
+    set_target_properties(test_mobile_finetuner_c_header PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+        LINKER_LANGUAGE CXX
+    )
+    target_link_libraries(test_mobile_finetuner_c_header PRIVATE operators)
+    add_test(NAME MobileFineTunerCHeader COMMAND test_mobile_finetuner_c_header)
+
+    # Runtime coverage for opaque handles, objective-specific trainers, and
+    # the error/buffer contracts exposed by the C ABI.
+    add_executable(test_mobile_finetuner_c_api
+        tests/test_mobile_finetuner_c_api.cpp
+    )
+    target_link_libraries(test_mobile_finetuner_c_api PRIVATE operators)
+    add_test(NAME MobileFineTunerCAPI COMMAND test_mobile_finetuner_c_api)
     
     # Autograd engine tests
     if(USE_NEW_AUTOGRAD_ENGINE)

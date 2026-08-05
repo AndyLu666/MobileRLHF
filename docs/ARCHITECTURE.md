@@ -15,9 +15,11 @@ ModelFamilyAdapter -> family-specific load layout and LoRA target policy
 TokenizerFactory   -> model-specific tokenizer through one interface
 make_causal_lm_batch -> text/token rows to input_ids, attention_mask, labels
 make_preference_batch -> prompt/chosen/rejected rows to response-masked pairs
+make_kto_batch      -> binary rows plus rotated mismatched-completion KL branch
 AutoModelForCausalLM -> concrete graph dispatch + SafeTensors loading + LoRA
 AutoTrainer        -> SFT causal-LM LoRA training core
 DPOTrainer         -> preference-pair LoRA training core
+KTOTrainer         -> canonical binary-feedback LoRA training core
 Graph class        -> GPT-2 / Gemma / Qwen / Llama forward and backward math
 SafeTensorsLoader  -> external checkpoint tensors into graph weights
 LoRA modules       -> trainable adapters on named target projections
@@ -36,11 +38,14 @@ Android SDK AAR    -> Java/JNI packaging over AutoModel + AutoTrainer
 
 ## Public Discovery Layer
 
-Use the umbrella header:
+Use the C++ umbrella header:
 
 ```cpp
-#include "mobile_finetuner/mobile_finetuner.h"
+#include "mobile_finetuner/mobile_finetuner.hpp"
 ```
+
+Language bindings and C consumers use the stable opaque-handle ABI in
+`mobile_finetuner/mobile_finetuner.h`; see `docs/C_API.md`.
 
 Inspect a model directory:
 

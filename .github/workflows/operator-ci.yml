@@ -122,7 +122,7 @@ jobs:
           #include "finetune_ops/optim/gemma_trainer.h"
           #include "finetune_ops/optim/optimizer.h"
           #include "finetune_ops/optim/trainer.h"
-          #include "mobile_finetuner/mobile_finetuner.h"
+          #include "mobile_finetuner/mobile_finetuner.hpp"
           int main() { return 0; }
           EOF
           cmake -S /tmp/operators-consumer -B /tmp/operators-consumer/build -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/operator/install"
@@ -133,16 +133,23 @@ jobs:
           mkdir -p /tmp/mft-consumer
           cat > /tmp/mft-consumer/CMakeLists.txt <<'EOF'
           cmake_minimum_required(VERSION 3.16)
-          project(mft_consumer LANGUAGES CXX)
+          project(mft_consumer LANGUAGES C CXX)
           set(CMAKE_CXX_STANDARD 17)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           find_package(MobileFineTuner REQUIRED)
-          add_executable(consumer main.cpp)
-          target_link_libraries(consumer PRIVATE MobileFineTuner::operators)
+          add_executable(consumer_cpp main.cpp)
+          target_link_libraries(consumer_cpp PRIVATE MobileFineTuner::operators)
+          add_executable(consumer_c main.c)
+          set_target_properties(consumer_c PROPERTIES C_STANDARD 11 LINKER_LANGUAGE CXX)
+          target_link_libraries(consumer_c PRIVATE MobileFineTuner::operators)
           EOF
           cat > /tmp/mft-consumer/main.cpp <<'EOF'
-          #include "mobile_finetuner/mobile_finetuner.h"
+          #include "mobile_finetuner/mobile_finetuner.hpp"
           int main() { return 0; }
+          EOF
+          cat > /tmp/mft-consumer/main.c <<'EOF'
+          #include "mobile_finetuner/mobile_finetuner.h"
+          int main(void) { return mft_api_version() == MFT_API_VERSION ? 0 : 1; }
           EOF
           cmake -S /tmp/mft-consumer -B /tmp/mft-consumer/build -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/operator/install"
           cmake --build /tmp/mft-consumer/build -j4

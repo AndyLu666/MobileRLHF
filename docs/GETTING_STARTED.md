@@ -24,13 +24,23 @@ Each model directory must contain `config.json`, tokenizer assets, and either
 `model.safetensors` or `model.safetensors.index.json` plus its shard files.
 See `docs/MODEL_ASSETS.md` for the full contract.
 
-## 2. Use the C++ API
+## 2. Use the native APIs
 
-Include the stable umbrella header:
+For C++, include the convenience umbrella header:
 
 ```cpp
+#include "mobile_finetuner/mobile_finetuner.hpp"
+```
+
+For C, Swift/Rust/Python bindings, or another FFI, use the stable opaque-handle
+ABI instead:
+
+```c
 #include "mobile_finetuner/mobile_finetuner.h"
 ```
+
+See [C_API.md](C_API.md) for lifecycle, error/buffer contracts, and a complete
+canonical KTO example.
 
 Minimal causal-LM LoRA step:
 
@@ -90,10 +100,11 @@ ops::DPOTrainer dpo(*policy, dpo_cfg);
 auto dpo_result = dpo.train_step(pref_batch);
 ```
 
-The two maintained objectives are SFT and DPO. Use SFT for supervised
-causal-LM labels. Use DPO when the dataset contains preference pairs:
-`prompt`, `chosen`, and `rejected`. The recommended mobile DPO path stores
-cached frozen-reference log probabilities with each pair.
+The maintained objectives are SFT, DPO, and KTO. Use SFT for supervised
+causal-LM labels, DPO for `prompt/chosen/rejected` preference pairs, and KTO for
+unpaired `prompt/completion/desirable` binary feedback. The recommended mobile
+preference paths cache frozen-reference log probabilities. Canonical KTO also
+caches the rotated mismatched-completion KL score for the exact ordered batch.
 
 Recommended CMake consumer setup:
 
@@ -132,7 +143,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.mobilefinetuner:mobilefinetuner-android:0.1.0")
+    implementation("com.mobilefinetuner:mobilefinetuner-android:0.2.0")
 }
 ```
 

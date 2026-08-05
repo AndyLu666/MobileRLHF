@@ -30,6 +30,12 @@ object FeedbackJsonl {
         val rejected: String
     )
 
+    data class TrainingKtoRow(
+        val prompt: String,
+        val response: String,
+        val desirable: Boolean
+    )
+
     fun encodeChoice(record: ChoiceRecord): String {
         val normalizedLabel = record.chosenLabel.trim().uppercase()
         require(normalizedLabel == "A" || normalizedLabel == "B") {
@@ -126,6 +132,44 @@ object FeedbackJsonl {
                 if (chosen.isBlank() || rejected.isBlank()) null else TrainingPair(prompt, chosen, rejected)
             }
         }
+    }
+
+    /**
+     * Preserve native KTO's unpaired prompt/response/label contract.
+     *
+     * Pair records are explicitly unpaired without synthetic baselines. The
+     * returned rows place desirable feedback first and undesirable feedback
+     * second, matching the standard KTO preference-unpairing layout. Single
+     * thumbs rows keep their label and payload.
+     */
+    fun toKtoRows(lines: List<String>): List<TrainingKtoRow> {
+        val desirableRows = mutableListOf<TrainingKtoRow>()
+        val undesirableRows = mutableListOf<TrainingKtoRow>()
+        lines.forEach { line ->
+            val trimmed = line.trim()
+            if (trimmed.isBlank()) return@forEach
+            val prompt = extractJsonString(trimmed, "prompt")?.trim().orEmpty()
+            if (prompt.isBlank()) return@forEach
+
+            if (hasTypedSingle(trimmed)) {
+                val response = extractJsonString(trimmed, "response")?.trim().orEmpty()
+                if (response.isBlank()) return@forEach
+                when {
+                    hasJsonBooleanValue(trimmed, "label", true) ->
+                        desirableRows += TrainingKtoRow(prompt, response, true)
+                    hasJsonBooleanValue(trimmed, "label", false) ->
+                        undesirableRows += TrainingKtoRow(prompt, response, false)
+                }
+            } else {
+                val chosen = extractJsonString(trimmed, "chosen")?.trim().orEmpty()
+                val rejected = extractJsonString(trimmed, "rejected")?.trim().orEmpty()
+                if (chosen.isNotBlank() && rejected.isNotBlank()) {
+                    desirableRows += TrainingKtoRow(prompt, chosen, true)
+                    undesirableRows += TrainingKtoRow(prompt, rejected, false)
+                }
+            }
+        }
+        return desirableRows + undesirableRows
     }
 
     private fun hasJsonField(line: String, key: String): Boolean {

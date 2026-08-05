@@ -4,11 +4,16 @@
 #include "model_family_adapter.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -127,10 +132,40 @@ std::vector<float> parse_float_list(const std::string& text) {
         if (item.empty()) {
             continue;
         }
-        values.push_back(std::stof(item));
+        const float value = std::stof(item);
+        if (!std::isfinite(value)) {
+            throw std::runtime_error("adapter tensor data contains a non-finite value");
+        }
+        values.push_back(value);
     }
     return values;
 }
+
+std::filesystem::path make_adapter_temp_path(const std::filesystem::path& target) {
+    static std::atomic<std::uint64_t> serial{0};
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    return target.string() + ".tmp." + std::to_string(now) + "." +
+           std::to_string(thread_id) + "." + std::to_string(serial.fetch_add(1));
+}
+
+class TemporaryAdapterFile {
+public:
+    explicit TemporaryAdapterFile(std::filesystem::path path) : path_(std::move(path)) {}
+    ~TemporaryAdapterFile() {
+        if (!committed_) {
+            std::error_code ignored;
+            std::filesystem::remove(path_, ignored);
+        }
+    }
+
+    const std::filesystem::path& path() const { return path_; }
+    void commit() { committed_ = true; }
+
+private:
+    std::filesystem::path path_;
+    bool committed_ = false;
+};
 
 }  // namespace
 
@@ -376,32 +411,58 @@ std::vector<std::pair<std::string, TensorPtr>> AutoModelForCausalLM::named_train
 }
 
 void AutoModelForCausalLM::save_lora_adapter_jsonl(const std::string& path) {
+    if (path.empty()) {
+        throw std::invalid_argument("save_lora_adapter_jsonl: path must not be empty");
+    }
     const auto tensors = named_trainable_parameters();
     if (tensors.empty()) {
         throw std::runtime_error("save_lora_adapter_jsonl: no LoRA trainable parameters to save");
+    }
+
+    // Validate the entire snapshot before touching the destination. This also
+    // prevents a late unsupported dtype from leaving a partially written file.
+    for (const auto& kv : tensors) {
+        if (!kv.second || kv.second->dtype() != kFloat32) {
+            throw std::runtime_error(
+                "save_lora_adapter_jsonl: trainable parameter is not float32: " + kv.first);
+        }
     }
 
     std::filesystem::path adapter_path(path);
     if (adapter_path.has_parent_path()) {
         std::filesystem::create_directories(adapter_path.parent_path());
     }
-    std::ofstream out(path);
+    TemporaryAdapterFile temp_file(make_adapter_temp_path(adapter_path));
+    std::ofstream out(temp_file.path(), std::ios::out | std::ios::trunc);
     if (!out.is_open()) {
-        throw std::runtime_error("save_lora_adapter_jsonl: failed to open " + path);
+        throw std::runtime_error(
+            "save_lora_adapter_jsonl: failed to open temporary file for " + path);
     }
     out << "{\"format\":\"mobile_finetuner.lora_adapter_jsonl.v1\"}\n";
     for (const auto& kv : tensors) {
-        if (!kv.second || kv.second->dtype() != kFloat32) {
-            throw std::runtime_error("save_lora_adapter_jsonl: trainable parameter is not float32: " + kv.first);
-        }
         out << "{\"name\":\"" << json_escape(kv.first)
             << "\",\"shape\":" << shape_to_json(kv.second->shape())
             << ",\"data\":" << tensor_data_to_json(kv.second)
             << "}\n";
     }
+    out.flush();
+    if (!out.good()) {
+        throw std::runtime_error("save_lora_adapter_jsonl: failed while writing " + path);
+    }
+    out.close();
+
+    // The temporary file lives beside the target, so POSIX rename is an
+    // atomic replacement on the macOS/Linux/Android platforms we support.
+    if (std::rename(temp_file.path().string().c_str(), adapter_path.string().c_str()) != 0) {
+        throw std::runtime_error("save_lora_adapter_jsonl: failed to replace " + path);
+    }
+    temp_file.commit();
 }
 
 void AutoModelForCausalLM::load_lora_adapter_jsonl(const std::string& path) {
+    if (path.empty()) {
+        throw std::invalid_argument("load_lora_adapter_jsonl: path must not be empty");
+    }
     auto tensors = named_trainable_parameters();
     if (tensors.empty()) {
         throw std::runtime_error("load_lora_adapter_jsonl: initialize LoRA before loading adapter");
@@ -416,12 +477,35 @@ void AutoModelForCausalLM::load_lora_adapter_jsonl(const std::string& path) {
         throw std::runtime_error("load_lora_adapter_jsonl: failed to open " + path);
     }
 
+    struct PendingTensor {
+        TensorPtr target;
+        std::vector<float> data;
+    };
+    std::unordered_map<std::string, PendingTensor> pending;
+    pending.reserve(tensors.size());
+
     std::string line;
-    int loaded = 0;
+    bool saw_format = false;
+    bool saw_tensor = false;
     while (std::getline(in, line)) {
-        if (line.empty() || line.find("\"format\"") != std::string::npos) {
+        if (line.empty()) {
             continue;
         }
+        const std::string format = extract_json_string_field(line, "format");
+        if (!format.empty()) {
+            if (saw_format || saw_tensor ||
+                format != "mobile_finetuner.lora_adapter_jsonl.v1") {
+                throw std::runtime_error(
+                    "load_lora_adapter_jsonl: invalid or misplaced format record");
+            }
+            saw_format = true;
+            continue;
+        }
+        if (!saw_format) {
+            throw std::runtime_error(
+                "load_lora_adapter_jsonl: missing format record before tensor data");
+        }
+        saw_tensor = true;
         const std::string name = extract_json_string_field(line, "name");
         const auto shape = parse_shape_list(extract_json_array_field(line, "shape"));
         const auto data = parse_float_list(extract_json_array_field(line, "data"));
@@ -431,6 +515,9 @@ void AutoModelForCausalLM::load_lora_adapter_jsonl(const std::string& path) {
         auto it = by_name.find(name);
         if (it == by_name.end()) {
             throw std::runtime_error("load_lora_adapter_jsonl: adapter tensor not present in model: " + name);
+        }
+        if (pending.find(name) != pending.end()) {
+            throw std::runtime_error("load_lora_adapter_jsonl: duplicate tensor record: " + name);
         }
         TensorPtr tensor = it->second;
         if (tensor->dtype() != kFloat32) {
@@ -442,12 +529,36 @@ void AutoModelForCausalLM::load_lora_adapter_jsonl(const std::string& path) {
         if (static_cast<int64_t>(data.size()) != tensor->numel()) {
             throw std::runtime_error("load_lora_adapter_jsonl: data length mismatch for " + name);
         }
-        float* dst = tensor->data<float>();
-        std::copy(data.begin(), data.end(), dst);
-        ++loaded;
+        pending.emplace(name, PendingTensor{tensor, data});
     }
-    if (loaded == 0) {
+    if (!in.eof() && in.fail()) {
+        throw std::runtime_error("load_lora_adapter_jsonl: failed while reading " + path);
+    }
+    if (!saw_format) {
+        throw std::runtime_error("load_lora_adapter_jsonl: adapter file is missing its format record");
+    }
+    if (pending.empty()) {
         throw std::runtime_error("load_lora_adapter_jsonl: adapter file did not contain any tensors");
+    }
+    if (pending.size() != by_name.size()) {
+        std::string missing;
+        for (const auto& kv : by_name) {
+            if (pending.find(kv.first) == pending.end()) {
+                if (!missing.empty()) {
+                    missing += ", ";
+                }
+                missing += kv.first;
+            }
+        }
+        throw std::runtime_error(
+            "load_lora_adapter_jsonl: adapter is incomplete; missing tensors: " + missing);
+    }
+
+    // Commit only after every record has been parsed and validated. A corrupt
+    // file therefore leaves all live LoRA tensors untouched.
+    for (auto& kv : pending) {
+        float* dst = kv.second.target->data<float>();
+        std::copy(kv.second.data.begin(), kv.second.data.end(), dst);
     }
 }
 

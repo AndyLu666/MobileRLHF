@@ -18,6 +18,7 @@ struct DPOMetrics {
     float rejected_reward = 0.0f;
     float reward_margin = 0.0f;
     float reward_accuracy = 0.0f;
+    float kl_estimate = 0.0f;
 };
 
 /**
@@ -117,6 +118,48 @@ TensorPtr streaming_kto_loss_with_ref_logps(const TensorPtr& hidden,
                                             float desirable_weight = 1.0f,
                                             float undesirable_weight = 1.0f);
 
+/**
+ * @brief Canonical KTO loss with a separately scored mismatched KL branch.
+ *
+ * policy_kl_logits/ref_kl_logps score prompt_i with a completion rotated from
+ * another sample. The non-negative batch-mean KL estimate is detached:
+ * gradients flow only through policy_logits, never through policy_kl_logits.
+ */
+TensorPtr kto_loss_with_ref_logps_and_kl(
+    const TensorPtr& policy_logits,
+    const TensorPtr& policy_kl_logits,
+    const std::vector<float>& ref_logps,
+    const std::vector<float>& ref_kl_logps,
+    const TensorPtr& input_ids,
+    const TensorPtr& kl_input_ids,
+    const TensorPtr& response_mask,
+    const TensorPtr& kl_response_mask,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight = 1.0f,
+    float undesirable_weight = 1.0f);
+
+/**
+ * @brief Memory-first canonical KTO loss with a detached KL branch.
+ *
+ * Gradients flow through hidden and lm_head_weight for the matched response
+ * branch only. kl_hidden is used exclusively to estimate the detached KL term.
+ */
+TensorPtr streaming_kto_loss_with_ref_logps_and_kl(
+    const TensorPtr& hidden,
+    const TensorPtr& kl_hidden,
+    const TensorPtr& lm_head_weight,
+    const std::vector<float>& ref_logps,
+    const std::vector<float>& ref_kl_logps,
+    const TensorPtr& input_ids,
+    const TensorPtr& kl_input_ids,
+    const TensorPtr& response_mask,
+    const TensorPtr& kl_response_mask,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight = 1.0f,
+    float undesirable_weight = 1.0f);
+
 DPOMetrics compute_dpo_metrics_from_logps(const std::vector<float>& policy_chosen_logps,
                                           const std::vector<float>& policy_rejected_logps,
                                           const std::vector<float>& ref_chosen_logps,
@@ -129,6 +172,23 @@ DPOMetrics compute_kto_metrics_from_logps(const std::vector<float>& policy_logps
                                           float beta,
                                           float desirable_weight = 1.0f,
                                           float undesirable_weight = 1.0f);
+
+/**
+ * @brief Canonical KTO metrics from matched and mismatched sequence logps.
+ *
+ * Reported desirable/undesirable rewards are beta * (policy - reference), as
+ * in the KTO paper/TRL metrics. The detached KL estimate is returned in
+ * DPOMetrics::kl_estimate and is used for both loss and reward accuracy.
+ */
+DPOMetrics compute_kto_metrics_from_logps_and_kl(
+    const std::vector<float>& policy_logps,
+    const std::vector<float>& policy_kl_logps,
+    const std::vector<float>& ref_logps,
+    const std::vector<float>& ref_kl_logps,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight = 1.0f,
+    float undesirable_weight = 1.0f);
 
 DPOMetrics compute_dpo_metrics_from_logits(const TensorPtr& policy_chosen_logits,
                                            const TensorPtr& policy_rejected_logits,
@@ -169,6 +229,21 @@ DPOMetrics compute_kto_metrics_from_policy_hidden_and_ref_logps(
     const std::vector<float>& ref_logps,
     const TensorPtr& input_ids,
     const TensorPtr& response_mask,
+    const std::vector<float>& labels,
+    float beta,
+    float desirable_weight = 1.0f,
+    float undesirable_weight = 1.0f);
+
+DPOMetrics compute_kto_metrics_from_policy_hidden_and_ref_logps_and_kl(
+    const TensorPtr& hidden,
+    const TensorPtr& kl_hidden,
+    const TensorPtr& lm_head_weight,
+    const std::vector<float>& ref_logps,
+    const std::vector<float>& ref_kl_logps,
+    const TensorPtr& input_ids,
+    const TensorPtr& kl_input_ids,
+    const TensorPtr& response_mask,
+    const TensorPtr& kl_response_mask,
     const std::vector<float>& labels,
     float beta,
     float desirable_weight = 1.0f,
