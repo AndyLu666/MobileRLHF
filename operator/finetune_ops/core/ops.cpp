@@ -217,8 +217,13 @@ namespace {
     void matmul_fallback_nn_mixed_b(const float* A, const void* B, DType b_dtype, float* C,
                                     int64_t M, int64_t N, int64_t K) {
         std::fill(C, C + M * N, 0.0f);
+#ifdef USE_BLAS
+        constexpr int64_t N_BLOCK = 256;
+        constexpr int64_t K_BLOCK = 256;
+#else
         constexpr int64_t N_BLOCK = 64;
         constexpr int64_t K_BLOCK = 64;
+#endif
         std::vector<float> b_tile(static_cast<size_t>(N_BLOCK * K_BLOCK));
 
         for (int64_t kk = 0; kk < K; kk += K_BLOCK) {
@@ -235,6 +240,21 @@ namespace {
                     }
                 }
 
+#ifdef USE_BLAS
+                // Accelerate/OpenBLAS cannot consume BF16/FP16 operands through
+                // the portable CBLAS interface. Convert one bounded tile, then
+                // let SGEMM process every row instead of falling back to scalar
+                // multiply-adds for the entire low-precision model.
+                cblas_sgemm(CblasRowMajor,
+                            CblasNoTrans, CblasNoTrans,
+                            static_cast<int>(M), static_cast<int>(tile_n),
+                            static_cast<int>(tile_k),
+                            1.0f,
+                            A + kk, static_cast<int>(K),
+                            b_tile.data(), static_cast<int>(tile_n),
+                            1.0f,
+                            C + jj, static_cast<int>(N));
+#else
                 for (int64_t i = 0; i < M; ++i) {
                     float* c_row = C + i * N;
                     const float* a_row = A + i * K;
@@ -246,6 +266,7 @@ namespace {
                         }
                     }
                 }
+#endif
             }
         }
     }
@@ -253,8 +274,13 @@ namespace {
     void matmul_fallback_nt_mixed_b(const float* A, const void* B, DType b_dtype, float* C,
                                     int64_t M, int64_t N, int64_t K) {
         std::fill(C, C + M * N, 0.0f);
+#ifdef USE_BLAS
+        constexpr int64_t N_BLOCK = 256;
+        constexpr int64_t K_BLOCK = 256;
+#else
         constexpr int64_t N_BLOCK = 64;
         constexpr int64_t K_BLOCK = 64;
+#endif
         std::vector<float> b_tile(static_cast<size_t>(N_BLOCK * K_BLOCK));
 
         for (int64_t kk = 0; kk < K; kk += K_BLOCK) {
@@ -271,6 +297,17 @@ namespace {
                     }
                 }
 
+#ifdef USE_BLAS
+                cblas_sgemm(CblasRowMajor,
+                            CblasNoTrans, CblasTrans,
+                            static_cast<int>(M), static_cast<int>(tile_n),
+                            static_cast<int>(tile_k),
+                            1.0f,
+                            A + kk, static_cast<int>(K),
+                            b_tile.data(), static_cast<int>(tile_k),
+                            1.0f,
+                            C + jj, static_cast<int>(N));
+#else
                 for (int64_t i = 0; i < M; ++i) {
                     const float* a_row = A + i * K;
                     float* c_row = C + i * N;
@@ -283,6 +320,7 @@ namespace {
                         c_row[jj + tj] += sum;
                     }
                 }
+#endif
             }
         }
     }

@@ -160,6 +160,53 @@ std::vector<float> compute_sequence_logps_logits(const TensorPtr& logits,
     return logps;
 }
 
+struct SelectedHiddenRows {
+    TensorPtr values;
+    std::vector<int64_t> batch_indices;
+    std::vector<int64_t> hidden_offsets;
+    std::vector<int32_t> class_ids;
+};
+
+SelectedHiddenRows select_response_hidden_rows(const TensorPtr& hidden,
+                                                const TensorPtr& input_ids,
+                                                const TensorPtr& response_mask,
+                                                int64_t vocab_size,
+                                                const char* name) {
+    const auto& shape = hidden->shape();
+    const int64_t B = shape[0];
+    const int64_t S = shape[1];
+    const int64_t H = shape[2];
+    const float* hidden_data = hidden->data<float>();
+    const int32_t* ids = input_ids->data<int32_t>();
+    const int32_t* mask = response_mask->data<int32_t>();
+
+    SelectedHiddenRows selected;
+    std::vector<float> values;
+    for (int64_t b = 0; b < B; ++b) {
+        for (int64_t s = 0; s + 1 < S; ++s) {
+            if (mask[b * S + (s + 1)] == 0) {
+                continue;
+            }
+            const int32_t cls = ids[b * S + (s + 1)];
+            if (cls < 0 || cls >= vocab_size) {
+                throw std::runtime_error(std::string(name) + ": token id out of range");
+            }
+            const int64_t hidden_offset = b * S + s;
+            const float* row = hidden_data + hidden_offset * H;
+            values.insert(values.end(), row, row + H);
+            selected.batch_indices.push_back(b);
+            selected.hidden_offsets.push_back(hidden_offset);
+            selected.class_ids.push_back(cls);
+        }
+    }
+    if (!selected.class_ids.empty()) {
+        selected.values = std::make_shared<Tensor>(
+            std::vector<int64_t>{static_cast<int64_t>(selected.class_ids.size()), H},
+            values.data(), kFloat32, kCPU);
+    }
+    return selected;
+}
+
 std::vector<float> compute_sequence_logps_hidden(const TensorPtr& hidden,
                                                  const TensorPtr& lm_head_weight,
                                                  const TensorPtr& input_ids,
@@ -167,55 +214,35 @@ std::vector<float> compute_sequence_logps_hidden(const TensorPtr& hidden,
     validate_hidden_inputs(hidden, lm_head_weight, input_ids, response_mask,
                            "sequence_logprob_masked_from_hidden");
 
-    const auto& hshape = hidden->shape();
-    const auto& wshape = lm_head_weight->shape();
-    const int64_t B = hshape[0];
-    const int64_t S = hshape[1];
-    const int64_t H = hshape[2];
-    const int64_t V = wshape[0];
-
-    const float* hidden_data = hidden->data<float>();
-    const int32_t* ids = input_ids->data<int32_t>();
-    const int32_t* mask = response_mask->data<int32_t>();
-    std::vector<float> logits(static_cast<size_t>(V), 0.0f);
+    const int64_t B = hidden->shape()[0];
+    const int64_t V = lm_head_weight->shape()[0];
     std::vector<float> logps(static_cast<size_t>(B), 0.0f);
+    const SelectedHiddenRows selected = select_response_hidden_rows(
+        hidden, input_ids, response_mask, V,
+        "sequence_logprob_masked_from_hidden");
+    if (!selected.values) {
+        return logps;
+    }
 
-    for (int64_t b = 0; b < B; ++b) {
-        double sum = 0.0;
-        for (int64_t s = 0; s + 1 < S; ++s) {
-            if (mask[b * S + (s + 1)] == 0) {
-                continue;
-            }
-            const int32_t cls = ids[b * S + (s + 1)];
-            if (cls < 0 || cls >= V) {
-                throw std::runtime_error("sequence_logprob_masked_from_hidden: token id out of range");
-            }
-
-            const float* hrow = hidden_data + (b * S + s) * H;
-            float max_val = -std::numeric_limits<float>::infinity();
-            float target = 0.0f;
-            for (int64_t v = 0; v < V; ++v) {
-                double z = 0.0;
-                const int64_t wbase = v * H;
-                for (int64_t h = 0; h < H; ++h) {
-                    z += static_cast<double>(hrow[h]) *
-                         static_cast<double>(row_value(lm_head_weight, wbase + h));
-                }
-                logits[static_cast<size_t>(v)] = static_cast<float>(z);
-                if (v == cls) {
-                    target = static_cast<float>(z);
-                }
-                max_val = std::max(max_val, static_cast<float>(z));
-            }
-
-            double denom = 0.0;
-            for (int64_t v = 0; v < V; ++v) {
-                denom += std::exp(static_cast<double>(logits[static_cast<size_t>(v)] - max_val));
-            }
-            sum += static_cast<double>(target) -
-                   (static_cast<double>(max_val) + std::log(denom));
+    // Project only the response positions. This preserves the streaming memory
+    // bound while batching the expensive vocabulary projection through the
+    // optimized mixed-precision matmul kernel.
+    const TensorPtr logits = matmul_rhs_T(selected.values, lm_head_weight);
+    const float* data = logits->data<float>();
+    for (size_t row_index = 0; row_index < selected.class_ids.size(); ++row_index) {
+        const float* row = data + row_index * static_cast<size_t>(V);
+        const int32_t cls = selected.class_ids[row_index];
+        float maximum = -std::numeric_limits<float>::infinity();
+        for (int64_t v = 0; v < V; ++v) {
+            maximum = std::max(maximum, row[v]);
         }
-        logps[static_cast<size_t>(b)] = static_cast<float>(sum);
+        double denominator = 0.0;
+        for (int64_t v = 0; v < V; ++v) {
+            denominator += std::exp(static_cast<double>(row[v] - maximum));
+        }
+        logps[static_cast<size_t>(selected.batch_indices[row_index])] +=
+            static_cast<float>(static_cast<double>(row[cls]) -
+                               (static_cast<double>(maximum) + std::log(denominator)));
     }
     return logps;
 }
@@ -498,6 +525,60 @@ void accumulate_hidden_logp_grads(const TensorPtr& grad_hidden,
     const int32_t* mask = response_mask->data<int32_t>();
     float* grad_hidden_data = grad_hidden ? grad_hidden->data<float>() : nullptr;
     float* grad_weight_data = grad_weight ? grad_weight->data<float>() : nullptr;
+
+    if (grad_hidden_data && !grad_weight_data) {
+        const SelectedHiddenRows selected = select_response_hidden_rows(
+            hidden, input_ids, response_mask, V,
+            "accumulate_hidden_logp_grads");
+        if (!selected.values) {
+            return;
+        }
+
+        TensorPtr selected_logits = matmul_rhs_T(selected.values, lm_head_weight);
+        float* logits_data = selected_logits->data<float>();
+        for (size_t row_index = 0; row_index < selected.class_ids.size(); ++row_index) {
+            float* row = logits_data + row_index * static_cast<size_t>(V);
+            const double coeff = sample_coeffs[
+                static_cast<size_t>(selected.batch_indices[row_index])];
+            if (coeff == 0.0) {
+                std::fill(row, row + V, 0.0f);
+                continue;
+            }
+            float maximum = -std::numeric_limits<float>::infinity();
+            for (int64_t v = 0; v < V; ++v) {
+                maximum = std::max(maximum, row[v]);
+            }
+            double denominator = 0.0;
+            for (int64_t v = 0; v < V; ++v) {
+                denominator += std::exp(static_cast<double>(row[v] - maximum));
+            }
+            const double inverse_denominator = 1.0 / denominator;
+            const int32_t cls = selected.class_ids[row_index];
+            for (int64_t v = 0; v < V; ++v) {
+                const double probability =
+                    std::exp(static_cast<double>(row[v] - maximum)) *
+                    inverse_denominator;
+                row[v] = static_cast<float>(
+                    coeff * ((v == cls ? 1.0 : 0.0) - probability));
+            }
+        }
+
+        const TensorPtr selected_grad_hidden = matmul(selected_logits, lm_head_weight);
+        const float* selected_grad_data = selected_grad_hidden->data<float>();
+        for (size_t row_index = 0; row_index < selected.hidden_offsets.size(); ++row_index) {
+            float* destination = grad_hidden_data +
+                selected.hidden_offsets[row_index] * H;
+            const float* source = selected_grad_data + row_index * static_cast<size_t>(H);
+            for (int64_t h = 0; h < H; ++h) {
+                destination[h] += source[h];
+            }
+        }
+        return;
+    }
+
+    // Trainable LM-head weights are uncommon for the mobile LoRA path. Retain
+    // the scalar reference implementation for that case because it must also
+    // accumulate a full [V,H] weight gradient.
     std::vector<float> logits(static_cast<size_t>(V), 0.0f);
 
     for (int64_t b = 0; b < B; ++b) {

@@ -10,9 +10,18 @@ set(MFT_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../..")
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(OPERATORS_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-option(MFT_ANDROID_USE_OPENBLAS "Enable OpenBLAS for Android native kernels" OFF)
+option(MFT_ANDROID_USE_OPENBLAS "Enable OpenBLAS for Android native kernels" ON)
 if(MFT_ANDROID_USE_OPENBLAS)
     set(USE_BLAS ON CACHE BOOL "Enable BLAS for Android native kernels" FORCE)
+    if(NOT OPENBLAS_ROOT)
+        set(
+            OPENBLAS_ROOT
+            "${MFT_ROOT}/third_party/openblas-android-arm64"
+            CACHE PATH
+            "Bundled Android arm64 OpenBLAS root"
+            FORCE
+        )
+    endif()
 else()
     set(USE_BLAS OFF CACHE BOOL "" FORCE)
 endif()

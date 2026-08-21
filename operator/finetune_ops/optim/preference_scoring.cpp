@@ -17,17 +17,20 @@ PreferenceLogps score_preference_logps(AutoModelForCausalLM& model,
         throw std::runtime_error("score_preference_logps: incomplete preference batch tensors");
     }
 
-    const TensorPtr lm_head = model.lm_head_weight_for_loss();
-    const TensorPtr chosen_hidden =
-        model.forward_hidden(batch.chosen_input_ids, batch.chosen_attention_mask);
-    const TensorPtr rejected_hidden =
-        model.forward_hidden(batch.rejected_input_ids, batch.rejected_attention_mask);
-
     PreferenceLogps scores;
-    scores.chosen_logps = sequence_logprob_masked_from_hidden(
-        chosen_hidden, lm_head, batch.chosen_input_ids, batch.chosen_response_mask);
-    scores.rejected_logps = sequence_logprob_masked_from_hidden(
-        rejected_hidden, lm_head, batch.rejected_input_ids, batch.rejected_response_mask);
+    const TensorPtr lm_head = model.lm_head_weight_for_loss();
+    {
+        const TensorPtr chosen_hidden =
+            model.forward_hidden(batch.chosen_input_ids, batch.chosen_attention_mask);
+        scores.chosen_logps = sequence_logprob_masked_from_hidden(
+            chosen_hidden, lm_head, batch.chosen_input_ids, batch.chosen_response_mask);
+    }
+    {
+        const TensorPtr rejected_hidden =
+            model.forward_hidden(batch.rejected_input_ids, batch.rejected_attention_mask);
+        scores.rejected_logps = sequence_logprob_masked_from_hidden(
+            rejected_hidden, lm_head, batch.rejected_input_ids, batch.rejected_response_mask);
+    }
     scores.valid_response_token_count = batch.valid_response_token_count;
     return scores;
 }
@@ -44,17 +47,22 @@ KTOLogps score_kto_logps(AutoModelForCausalLM& model,
         throw std::runtime_error("score_kto_logps: incomplete KTO batch tensors");
     }
 
-    const TensorPtr lm_head = model.lm_head_weight_for_loss();
-    const TensorPtr hidden =
-        model.forward_hidden(batch.input_ids, batch.attention_mask);
-    const TensorPtr kl_hidden =
-        model.forward_hidden(batch.kl_input_ids, batch.kl_attention_mask);
-
     KTOLogps scores;
-    scores.response_logps = sequence_logprob_masked_from_hidden(
-        hidden, lm_head, batch.input_ids, batch.response_mask);
-    scores.kl_response_logps = sequence_logprob_masked_from_hidden(
-        kl_hidden, lm_head, batch.kl_input_ids, batch.kl_response_mask);
+    const TensorPtr lm_head = model.lm_head_weight_for_loss();
+    {
+        // Score branches serially so a phone never retains both full-model
+        // activation graphs at once during frozen-reference evaluation.
+        const TensorPtr hidden =
+            model.forward_hidden(batch.input_ids, batch.attention_mask);
+        scores.response_logps = sequence_logprob_masked_from_hidden(
+            hidden, lm_head, batch.input_ids, batch.response_mask);
+    }
+    {
+        const TensorPtr kl_hidden =
+            model.forward_hidden(batch.kl_input_ids, batch.kl_attention_mask);
+        scores.kl_response_logps = sequence_logprob_masked_from_hidden(
+            kl_hidden, lm_head, batch.kl_input_ids, batch.kl_response_mask);
+    }
     scores.valid_response_token_count = batch.valid_response_token_count;
     scores.valid_kl_response_token_count = batch.valid_kl_response_token_count;
     return scores;
