@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include "mobile_finetuner/mobile_finetuner.hpp"
+#include "finetune_ops/core/memory_manager.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1256,5 +1257,10 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_mobilefinetuner_sdk_MobileFineTuner_nativeClose(JNIEnv* env, jclass, jlong handle) {
     guarded_void(env, [&]() {
         delete reinterpret_cast<NativeSession*>(handle);
+        // Tensor destruction returns blocks to the process-wide pool. Release
+        // those now-unused blocks immediately: retaining a complete Qwen
+        // training footprint after close can starve Android's system_server
+        // while another federated client is still training.
+        ops::MemoryManager::instance().force_cleanup();
     });
 }
