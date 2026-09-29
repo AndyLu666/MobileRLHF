@@ -85,7 +85,7 @@ afterEvaluate {
                 pom {
                     name.set("MobileFineTuner Android SDK")
                     description.set("Android AAR wrapper for the MobileFineTuner native C++ LoRA fine-tuning core.")
-                    url.set("https://github.com/mobilefinetuner/MobileFineTuner")
+                    url.set("https://github.com/Edge-Intelligence-Lab/MobileFineTuner")
                     licenses {
                         license {
                             name.set("Apache License 2.0")
