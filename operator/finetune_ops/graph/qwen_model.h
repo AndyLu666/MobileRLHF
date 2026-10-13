@@ -77,6 +77,10 @@ struct QwenKVCache {
 class QwenModel {
 public:
     explicit QwenModel(const QwenConfig& cfg);
+    QwenModel(const QwenConfig& cfg, bool allocate_weights);
+    TensorPtr forward_attention_block(const TensorPtr& hidden, const TensorPtr& attention_mask, int layer = 0);
+    TensorPtr forward_mlp_block(const TensorPtr& hidden, int layer = 0);
+    TensorPtr forward_block(const TensorPtr& hidden, const TensorPtr& attention_mask, int layer = 0);
     ~QwenModel() = default;
 
     TensorPtr forward_hidden(const TensorPtr& input_ids, const TensorPtr& attention_mask = nullptr);

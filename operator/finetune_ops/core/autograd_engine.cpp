@@ -178,6 +178,14 @@ void Engine::run_backward(const std::vector<TensorPtr>& outputs,
         return;
     }
     
+    // First-order backward must not retain a second graph of its own work.
+    struct RecordingGuard {
+        bool& enabled;
+        bool previous;
+        explicit RecordingGuard(bool& flag) : enabled(flag), previous(flag) { enabled = false; }
+        ~RecordingGuard() { enabled = previous; }
+    } recording_guard(enabled_);
+
     // Topological order: process each node after all of its consumers so
     // accumulated gradients are complete.
     auto topo = topological_sort(roots);
@@ -218,6 +226,16 @@ void Engine::run_backward(const std::vector<TensorPtr>& outputs,
         // `continue` above.
         if (!node->tensor->retains_grad()) {
             pending_grads_.erase(raw_ptr);
+            // All consumers have run. Keeping this node's saved tensors until
+            // the entire backward finishes needlessly retains the forward
+            // graph alongside its gradients. Leaf/retained gradients stay in
+            // the registry for the final writeback below.
+            node->tensor->grad_node_.reset();
+            node->backward_fn.reset();
+            node->next_edges.clear();
+            tensor_to_node_.erase(raw_ptr);
+            tensor_registry_.erase(raw_ptr);
+            node->tensor.reset();
         }
     }
     

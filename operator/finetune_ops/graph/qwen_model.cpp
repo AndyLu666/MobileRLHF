@@ -220,7 +220,10 @@ QwenConfig QwenConfig::from_pretrained(const std::string& path) {
 }
 
 // -------------- Construction --------------
-QwenModel::QwenModel(const QwenConfig& cfg) : config_(cfg) {
+QwenModel::QwenModel(const QwenConfig& cfg) : QwenModel(cfg, true) {}
+
+QwenModel::QwenModel(const QwenConfig& cfg, bool allocate_weights) : config_(cfg) {
+    if (!allocate_weights) { layers_.resize(cfg.num_hidden_layers); return; }
     const bool defer_large_placeholders = qwen_should_defer_large_placeholders(cfg);
     if (!defer_large_placeholders) {
         embed_tokens_ = std::make_shared<Tensor>(std::vector<int64_t>{cfg.vocab_size, cfg.hidden_size}, kFloat32, kCPU);
@@ -625,6 +628,30 @@ TensorPtr QwenModel::mlp(const TensorPtr& x, QwenBlock& blk) {
     auto act = swiglu(gate, up);
     auto down = matmul(act, blk.down_proj_weight);
     return down;
+}
+
+TensorPtr QwenModel::forward_attention_block(const TensorPtr& hidden, const TensorPtr& attention_mask, int layer) {
+    if (layer < 0 || layer >= config_.num_hidden_layers) throw std::invalid_argument("Invalid block index");
+    TensorPtr pad_mask;
+    if (attention_mask) {
+        pad_mask = zeros({attention_mask->shape()[0], 1, 1, attention_mask->shape()[1]}, kFloat32, kCPU);
+        for (int64_t i = 0; i < attention_mask->numel(); ++i)
+            pad_mask->data<float>()[i] = attention_mask->data<float>()[i] > 0.5f ? 0.0f : -1e9f;
+    }
+    auto& block = layers_[layer];
+    auto norm = rms_norm_affine(hidden, block.input_norm_weight, config_.rms_norm_eps);
+    return add(hidden, attention(norm, block, build_causal_mask(hidden->shape()[1]), pad_mask, hidden->shape()[1]));
+}
+
+TensorPtr QwenModel::forward_mlp_block(const TensorPtr& hidden, int layer) {
+    if (layer < 0 || layer >= config_.num_hidden_layers) throw std::invalid_argument("Invalid block index");
+    auto& block = layers_[layer];
+    auto norm = rms_norm_affine(hidden, block.post_norm_weight, config_.rms_norm_eps);
+    return add(hidden, mlp(norm, block));
+}
+
+TensorPtr QwenModel::forward_block(const TensorPtr& hidden, const TensorPtr& attention_mask, int layer) {
+    return forward_mlp_block(forward_attention_block(hidden, attention_mask, layer), layer);
 }
 
 // -------------- Forward --------------

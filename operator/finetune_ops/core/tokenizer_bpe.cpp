@@ -306,20 +306,49 @@ namespace simple_json {
             throw std::runtime_error("Cannot open: " + filepath);
         }
 
-        std::stringstream buffer;
-        buffer << f.rdbuf();
-        std::string content = buffer.str();
-
+        // tokenizer.json contains the entire BPE vocabulary. Read only this
+        // small root property instead of holding two copies of the full file.
         std::vector<AddedTokenInfo> tokens;
-
-        // Slice the added_tokens array only to avoid heavyweight regex on large files
-        size_t start = content.find("\"added_tokens\"");
-        if (start == std::string::npos) return tokens;
-        start = content.find('[', start);
-        if (start == std::string::npos) return tokens;
-        size_t close = content.find(']', start);
-        if (close == std::string::npos) return tokens;
-        std::string slice = content.substr(start, close - start);
+        std::string slice;
+        int depth = 0;
+        char c = 0;
+        while (f.get(c)) {
+            if (c == '{' || c == '[') { ++depth; continue; }
+            if (c == '}' || c == ']') { --depth; continue; }
+            if (c != '"') continue;
+            std::string name;
+            bool escaped = false;
+            while (f.get(c)) {
+                if (!escaped && c == '"') break;
+                if (depth == 1 && name.size() < 64) name += c;
+                if (!escaped && c == '\\') escaped = true;
+                else escaped = false;
+            }
+            if (depth != 1 || name != "added_tokens") continue;
+            f >> std::ws;
+            if (f.peek() != ':') continue;
+            f.get(); f >> std::ws;
+            if (!f.get(c) || c != '[') throw std::runtime_error("Invalid added_tokens array");
+            int array_depth = 1;
+            bool in_string = false;
+            escaped = false;
+            while (array_depth && f.get(c)) {
+                if (slice.size() >= 1024 * 1024) throw std::runtime_error("added_tokens array exceeds 1 MiB");
+                if (in_string) {
+                    if (!escaped && c == '"') in_string = false;
+                    if (!escaped && c == '\\') escaped = true;
+                    else escaped = false;
+                } else {
+                    if (c == '"') in_string = true;
+                    else if (c == '[') ++array_depth;
+                    else if (c == ']') --array_depth;
+                }
+                if (array_depth) slice += c;
+            }
+            if (array_depth) throw std::runtime_error("Truncated added_tokens array");
+            break;
+        }
+        if (slice.empty()) return tokens;
 
         std::regex item_re(
             R"REGEX("id"\s*:\s*(\d+)[^}]*?"content"\s*:\s*"((?:[^"\\]|\\.)*)"[^}]*?"special"\s*:\s*(true|false))REGEX",

@@ -284,9 +284,23 @@ void test_factory_loads_minimal_real_assets() {
     }
 }
 
+void test_streamed_added_tokens() {
+    const fs::path root = make_case_dir("streamed_added_tokens");
+    write_minimal_qwen_assets(root);
+    write_file(root / "tokenizer.json",
+        R"({"decoy":"added_tokens","model":{"ignored":")" + std::string(2*1024*1024,'x') +
+        R"("},"added_tokens":[{"id":8,"content":"[done]","special":true},{"id":9,"content":"<|endoftext|>","special":true},{"id":10,"content":"<|im_end|>","special":true}]})");
+    auto tokenizer = ops::TokenizerFactory::from_pretrained(root.string());
+    auto ids = tokenizer->encode("[done]");
+    require_eq(static_cast<int>(ids.size()),1,"streamed special token length");
+    require_eq(ids[0],8,"brackets inside an added token must not close the JSON array");
+    require_eq(tokenizer->get_eos_token(),10,"streamed EOS token mismatch");
+}
+
 }  // namespace
 
 int main() {
+    test_streamed_added_tokens();
     test_config_inference();
     test_explicit_override_and_errors();
     test_factory_loads_minimal_real_assets();
