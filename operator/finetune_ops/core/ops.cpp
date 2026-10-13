@@ -1988,10 +1988,9 @@ TensorPtr reshape(const TensorPtr& tensor, const std::vector<int64_t>& shape) {
     if (tensor->requires_grad()) {
         result->set_requires_grad(true);
         
-        auto backward_fn = std::make_shared<ReshapeBackward>(tensor->shape());
-        
         #ifdef USE_NEW_AUTOGRAD_ENGINE
-        register_backward(result, {tensor}, backward_fn);
+        // Tensor::reshape already registered ReshapeBackward for `result`.
+        // Registering it again adds a second edge and doubles the gradient.
         #else
         result->set_grad_fn([tensor, original_shape = tensor->shape()](const TensorPtr& grad_output) -> std::vector<TensorPtr> {
             // [Translated comment removed - see documentation]
