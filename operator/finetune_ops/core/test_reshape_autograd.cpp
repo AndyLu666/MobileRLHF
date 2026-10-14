@@ -41,7 +41,7 @@ static void run_ops() {
     { auto x=leaf(); auto y=add(x,x); y->backward(ones(y->shape())); check("legitimate_repeated_input_add",x,2); }
     { auto x=leaf(); auto y=mul(x,x); y->backward(ones(y->shape())); check("legitimate_repeated_input_mul",x,2); }
     { auto x=leaf(); auto y=transpose(x,0,1); y->backward(ones(y->shape())); check("transpose_control",x,1); }
-    { auto x=leaf(); auto y=reshape(transpose(x,0,1),{6}); y->backward(ones(y->shape())); check("noncontiguous_reshape",x,1); }
+    { auto x=leaf(); auto y=reshape(transpose(x,0,1),{6}); y->backward(ones(y->shape())); check("transpose_then_reshape",x,1); }
     { auto x=ones({2,3}); auto y=reshape(x,{3,2}); bool pass=!y->requires_grad(); failures+=!pass;
       std::cout << "{\"test\":\"frozen_input\",\"passed\":" << (pass?"true":"false") << "}\n"; }
 }

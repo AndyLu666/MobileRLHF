@@ -6,14 +6,25 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 using namespace ops;
+static bool gradient_agrees(double grad, double fd) {
+    return std::isfinite(grad) && std::isfinite(fd)
+        && std::abs(grad-fd)<=0.0003+0.02*std::abs(fd);
+}
 int main(int argc, char** argv) {
     if(argc!=2) throw std::runtime_error("Usage: qwen_fd output.csv");
+    const double inf=std::numeric_limits<double>::infinity();
+    const double nan=std::numeric_limits<double>::quiet_NaN();
+    if(gradient_agrees(0.0,inf) || gradient_agrees(0.0,-inf)
+       || gradient_agrees(0.0,nan) || gradient_agrees(inf,inf)
+       || gradient_agrees(nan,0.0) || !gradient_agrees(0.0,0.0))
+        throw std::runtime_error("Finite-difference comparison guard failed");
     QwenConfig cfg;
     cfg.vocab_size=32; cfg.hidden_size=16; cfg.intermediate_size=32;
     cfg.num_hidden_layers=2; cfg.num_attention_heads=4; cfg.num_key_value_heads=2;
@@ -84,7 +95,7 @@ int main(int argc, char** argv) {
             }
             const auto grad=grads[k][i];
             bool pass=std::isfinite(grad);
-            for(double fd:fds) pass=pass && std::abs(grad-fd)<=0.0003+0.02*std::abs(fd);
+            for(double fd:fds) pass=pass && gradient_agrees(grad,fd);
             failures+=!pass; ++count;
             error_max=std::max(error_max,std::abs(grad-fds[1]));
             fd_disagreement_max=std::max(fd_disagreement_max,std::abs(fds[0]-fds[1]));
